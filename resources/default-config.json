@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "assets": {
+    "tahoe_night": {
+      "label": "Tahoe Night",
+      "asset_id": "CF6347E2-4F81-4410-8892-4830991B6C5A"
+    },
+    "tahoe_morning": {
+      "label": "Tahoe Morning",
+      "asset_id": "B2FC91ED-6891-4DEB-85A1-268B2B4160B6"
+    },
+    "tahoe_day": {
+      "label": "Tahoe Day",
+      "asset_id": "4C108785-A7BA-422E-9C79-B0129F1D5550"
+    },
+    "tahoe_evening": {
+      "label": "Tahoe Evening",
+      "asset_id": "52ACB9B8-75FC-4516-BC60-4550CFF3B661"
+    }
+  },
+  "schedule": [
+    {
+      "start": "05:00",
+      "asset": "tahoe_morning",
+      "period": "morning"
+    },
+    {
+      "start": "09:00",
+      "asset": "tahoe_day",
+      "period": "day"
+    },
+    {
+      "start": "17:00",
+      "asset": "tahoe_evening",
+      "period": "evening"
+    },
+    {
+      "start": "20:00",
+      "asset": "tahoe_night",
+      "period": "night"
+    }
+  ]
+}
+

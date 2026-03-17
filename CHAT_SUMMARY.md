@@ -1,228 +1,95 @@
 # Tahoe Aerial Scheduler Chat Summary
 
-## What We Built
+## Current Project State
 
-We built a native macOS Tahoe Aerial scheduler that keeps Apple's Tahoe Aerial motion and switches clips on a time schedule.
+This folder is now the source-of-truth project for turning the Tahoe wallpaper prototype into release-ready software.
 
-The current prototype has two main parts:
+The working installed copy on this Mac currently lives in:
 
-- `scheduler.py`
-  - Python script that updates macOS's wallpaper store plists so the active wallpaper stays a native Apple Aerial.
-- `TahoeAerialMenu.js`
-  - A small menu bar app written in JXA that lets you change schedule slots and start times without editing JSON by hand.
+- `~/Library/Application Support/TahoeAerialScheduler`
+- `~/Applications/Tahoe Aerial Menu.app`
+- `~/Library/LaunchAgents/com.eljee.tahoe-aerial-scheduler.plist`
+- `~/Library/LaunchAgents/com.eljee.tahoe-aerial-menu.plist`
 
-## Why It Works This Way
+## What The Prototype Does
 
-The main requirement was to keep the real native Aerial behavior, including the moving wallpaper and screen saver feel, instead of switching to still-image dynamic wallpapers.
+- Keeps Apple's native Tahoe Aerial motion
+- Switches between Tahoe clips on a time schedule
+- Uses a menu bar helper to edit slot assignments and start times
 
-Because macOS does not provide a built-in "use this Aerial at this time of day" scheduler, the solution works by:
+The current Tahoe assets wired into the scheduler are:
 
-1. Updating the native wallpaper store files:
-   - `~/Library/Application Support/com.apple.wallpaper/Store/Index_v2.plist`
-   - `~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`
-2. Restarting `WallpaperAgent` so macOS applies the new Aerial.
-
-We discovered that updating only `Index_v2.plist` was not enough. That caused a grey flicker and a snap-back to the previous scene. Updating both stores fixed the reversion bug.
-
-## Current Installed Paths
-
-The working installed version currently lives here:
-
-- Scheduler source:
-  - `~/Library/Application Support/TahoeAerialScheduler/scheduler.py`
-- Menu source:
-  - `~/Library/Application Support/TahoeAerialScheduler/TahoeAerialMenu.js`
-- Config:
-  - `~/Library/Application Support/TahoeAerialScheduler/config.json`
-- State:
-  - `~/Library/Application Support/TahoeAerialScheduler/state.json`
-- Logs:
-  - `~/Library/Application Support/TahoeAerialScheduler/scheduler.log`
-  - `~/Library/Application Support/TahoeAerialScheduler/menu-ui.log`
-  - `~/Library/Application Support/TahoeAerialScheduler/menu-launch.log`
-- Compiled menu app:
-  - `~/Applications/Tahoe Aerial Menu.app`
-- Launch agents:
-  - `~/Library/LaunchAgents/com.eljee.tahoe-aerial-scheduler.plist`
-  - `~/Library/LaunchAgents/com.eljee.tahoe-aerial-menu.plist`
-
-## Tahoe Assets In Use
-
-The prototype is wired to these native Tahoe Aerial assets:
-
-- `Tahoe Night`
 - `Tahoe Morning`
 - `Tahoe Day`
 - `Tahoe Evening`
+- `Tahoe Night`
 
-Asset IDs currently used by the scheduler:
+## Current Technical Approach
 
-- `tahoe_night` -> `CF6347E2-4F81-4410-8892-4830991B6C5A`
-- `tahoe_morning` -> `B2FC91ED-6891-4DEB-85A1-268B2B4160B6`
-- `tahoe_day` -> `4C108785-A7BA-422E-9C79-B0129F1D5550`
-- `tahoe_evening` -> `52ACB9B8-75FC-4516-BC60-4550CFF3B661`
+The scheduler works by updating both of these wallpaper store files:
 
-## Schedule We Set Up
+- `~/Library/Application Support/com.apple.wallpaper/Store/Index_v2.plist`
+- `~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`
 
-The intended schedule was:
+Then it restarts `WallpaperAgent` so macOS applies the chosen native Aerial.
 
-- `20:00` to `05:00` -> `Tahoe Night`
-- `05:00` to `09:00` -> `Tahoe Morning`
-- `09:00` to `17:00` -> `Tahoe Day`
-- `17:00` to `20:00` -> `Tahoe Evening`
+We discovered that changing only one plist caused the wallpaper to flicker grey and then revert. Updating both fixed the reversion bug.
 
-During menu testing, the `17:00` slot was temporarily changed more than once. At last inspection, the live `config.json` had:
+## Menu Bar Decisions So Far
 
-- `05:00` -> `tahoe_morning`
-- `09:00` -> `tahoe_day`
-- `17:00` -> `tahoe_morning`
-- `20:00` -> `tahoe_night`
-
-So the `17:00` block may still currently be set to `Tahoe Morning` even though its `period` is still `evening`.
-
-## Menu Bar Design Decisions
-
-The menu bar companion went through a few iterations. The current design intent is:
-
-- Icon-only menu bar item, no extra `Tahoe` text beside the icon
-- Menu bar icon follows the current time period, not the selected clip
-- Top-level menu items show only time ranges, not `Morning`, `Day`, `Evening`, or `Night`
-- Clip names inside submenus keep the full Tahoe names:
-  - `Tahoe Morning`
-  - `Tahoe Day`
-  - `Tahoe Evening`
-  - `Tahoe Night`
-- `Tahoe Night` should appear at the bottom of the submenu list
+- icon-only menu bar item
+- icon follows the current time period, not the assigned clip
+- top-level items show only the time ranges
+- submenu items keep full names like `Tahoe Morning`
+- `Tahoe Night` is listed last in the submenu
 - `Open Config` stays
-- The extra clutter items were removed:
-  - `Sync Wallpaper To Current Time`
-  - `Current block`
-  - `Next change`
-  - `Refresh Menu`
-  - `Open Scheduler Folder`
-
-## Bugs We Hit And Fixed
-
-### Wallpaper Switching Bug
-
-Problem:
-
-- The wallpaper briefly went grey and then snapped back to the previous scene.
-
-Cause:
-
-- Only one wallpaper store plist was being updated.
-
-Fix:
-
-- Update both `Index_v2.plist` and `Index.plist`, then restart `WallpaperAgent`.
-
-### JXA Menu Bar Errors
-
-We hit repeated JXA bridge errors:
-
-- `TypeError: Object is not a function (-2700)`
-
-These came from several Cocoa bridge quirks in JXA, including:
-
-- selector naming differences
-- properties being treated like functions
-- `separatorItem` behavior
-- `representedObject` access
-- object init patterns like `.alloc.init`
-
-Those were iteratively fixed until the menu bar app launched and rendered properly.
 
 ## Known Limitation
 
-There is still a brief grey flash during wallpaper switching.
+There is still a brief grey flash during wallpaper switches.
 
-Our current understanding is:
+Current best understanding:
 
-- This is likely caused by macOS tearing down and reloading the wallpaper surface when `WallpaperAgent` reapplies the native Aerial.
-- With this native-plist-switching approach, we likely keep the true Aerial behavior but also keep that brief flash.
-- A smoother transition would probably require a more custom wallpaper-rendering approach, which would move away from the native Apple Aerial pipeline.
+- it is caused by macOS reloading the native wallpaper surface during the Aerial handoff
+- keeping true native Aerial behavior likely means keeping that brief flash
 
-## Why This Is Not Yet "Release-Ready"
+## Repo Work Completed
 
-Right now this is a good personal prototype, but not a clean shareable project yet. Main reasons:
+This folder now contains:
 
-- source of truth lives in `~/Library/Application Support/...` instead of a proper project repo
-- launch agents use your personal machine paths
-- the menu app is built ad hoc with `osacompile`
-- there is no proper install script, uninstall script, or release packaging flow
-- there is no GitHub-ready README, screenshots, or release notes structure
-- there is no license choice yet
+- `src/scheduler.py`
+- `src/TahoeAerialMenu.js`
+- `resources/default-config.json`
+- `scripts/install.sh`
+- `scripts/uninstall.sh`
+- `scripts/build-menu-app.sh`
+- `scripts/package-release.sh`
+- `README.md`
+- `docs/RELEASING.md`
 
-## Clean Path To Make It Releasable
+## Release Direction
 
-The simplest releasable v1 is:
+The current release-ready v1 plan is:
 
-1. Create a proper repo folder and make that the source of truth.
-2. Move or copy in:
-   - `scheduler.py`
-   - `TahoeAerialMenu.js`
-   - default config
-   - build/install scripts
-3. Add:
-   - `scripts/install.sh`
-   - `scripts/uninstall.sh`
-   - `scripts/build-menu-app.sh`
-   - launch agent templates
-   - `README.md`
-   - `docs/RELEASING.md`
-   - `.gitignore`
-4. Make install scripts generate machine-specific paths at install time instead of hardcoding your personal paths into the repo.
-5. Package a release ZIP for GitHub releases.
+1. Keep this repo as the source of truth.
+2. Use `./scripts/install.sh` to install or update the runtime on a Mac.
+3. Use `./scripts/package-release.sh v0.1.0` to build a GitHub release zip.
+4. Add screenshots, choose a license, and publish.
 
-That would already make it shareable for technically comfortable Mac users.
+## Most Recent Validation
 
-## Longer-Term Better Version
+The repo-backed installer has already been run successfully on this Mac.
 
-If we want a more polished public release, the next stronger step would be:
+Validated:
 
-- keep the scheduling logic
-- replace the JXA menu bar app with a small native SwiftUI menu bar app
+- shell scripts pass `bash -n`
+- `src/scheduler.py` passes `python3 -m py_compile`
+- `src/TahoeAerialMenu.js` compiles with `osacompile`
+- install script successfully rebuilt the live installed version
+- release archive created successfully in `dist/`
 
-That would likely give:
+## Notes For The Next Session
 
-- fewer fragile JXA bridge bugs
-- better dialogs and settings UI
-- easier packaging and signing later
-- a more professional app structure for wider distribution
-
-## Useful Commands From The Current Prototype
-
-Show schedule:
-
-```bash
-"/Library/Frameworks/Python.framework/Versions/Current/bin/python3" "$HOME/Library/Application Support/TahoeAerialScheduler/scheduler.py" show-schedule
-```
-
-Show status:
-
-```bash
-"/Library/Frameworks/Python.framework/Versions/Current/bin/python3" "$HOME/Library/Application Support/TahoeAerialScheduler/scheduler.py" status
-```
-
-Apply current schedule:
-
-```bash
-"/Library/Frameworks/Python.framework/Versions/Current/bin/python3" "$HOME/Library/Application Support/TahoeAerialScheduler/scheduler.py" apply
-```
-
-Change a slot's clip:
-
-```bash
-"/Library/Frameworks/Python.framework/Versions/Current/bin/python3" "$HOME/Library/Application Support/TahoeAerialScheduler/scheduler.py" set-slot 17:00 tahoe_evening
-```
-
-Change a slot's start time:
-
-```bash
-"/Library/Frameworks/Python.framework/Versions/Current/bin/python3" "$HOME/Library/Application Support/TahoeAerialScheduler/scheduler.py" set-start-time 17:00 18:30
-```
-
-## Suggested Next Step
-
-Use this folder as the new workspace and turn it into the actual repo source of truth. From there, the next build task is to copy the working installed prototype into this project folder and wrap it with proper install, uninstall, and packaging scripts.
+- check whether the current live `17:00` slot should remain `Tahoe Morning` or be put back to `Tahoe Evening`
+- decide on the final launch-agent label namespace before public release
+- choose a license before publishing to GitHub
