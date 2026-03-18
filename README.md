@@ -7,6 +7,7 @@ This project is aimed at people who want:
 - native Apple Tahoe Aerial wallpapers
 - automatic time-based switching
 - a lightweight menu bar control for changing time blocks and clips
+- a setup flow that detects missing Tahoe downloads and points the user to Wallpaper settings
 
 ## Current Status
 
@@ -27,9 +28,10 @@ The maintainer docs in `docs/RELEASING.md` are intentionally kept in the repo so
 ## Requirements
 
 - macOS with the Tahoe Aerials available
-- The Tahoe Aerials downloaded at least once in `System Settings > Wallpaper`
 - Python 3
 - `osacompile` available on the Mac
+
+If the Tahoe Aerials are not downloaded yet, the installer and menu app will detect that and prompt the user to open Wallpaper settings.
 
 ## Important Limitation
 
@@ -55,6 +57,7 @@ End-user flow:
 - download the DMG from GitHub Releases
 - open it
 - double-click `Install Tahoe Aerial Scheduler.app`
+- if Tahoe clips are missing, click `Open Wallpaper Settings` in the prompt and download them there
 
 Because the app is not signed or notarized yet, macOS may warn the first time. If that happens, right-click the installer app and choose `Open`.
 

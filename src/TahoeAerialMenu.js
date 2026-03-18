@@ -10,12 +10,14 @@ const schedulerDir = `${homeDir}/Library/Application Support/TahoeAerialSchedule
 const schedulerRunnerPath = `${schedulerDir}/run-scheduler.sh`;
 const configPath = `${schedulerDir}/config.json`;
 const menuLogPath = `${schedulerDir}/menu-ui.log`;
+const wallpaperSettingsURL = "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension";
 
 const assetOrder = ["tahoe_morning", "tahoe_day", "tahoe_evening", "tahoe_night"];
 
 let delegate = null;
 let statusItem = null;
 let refreshTimer = null;
+let missingAssetsPromptSignature = null;
 
 function logMessage(message) {
   const timestamp = (new Date()).toISOString();
@@ -55,6 +57,10 @@ function promptForText(prompt, defaultAnswer) {
 
 function openTextEdit(path) {
   app.doShellScript(`/usr/bin/open -a TextEdit ${shellQuote(path)}`);
+}
+
+function openWallpaperSettings() {
+  app.doShellScript(`/usr/bin/open ${shellQuote(wallpaperSettingsURL)}`);
 }
 
 function assetLabel(info, assetKey) {
@@ -133,6 +139,42 @@ function representedItem(title, actionName, representedValue, target, enabled = 
   return item;
 }
 
+function missingAssetsSummary(info) {
+  return info.missing_assets.map((item) => item.label).join(", ");
+}
+
+function maybePromptForMissingAssets(info) {
+  if (!info.missing_assets || info.missing_assets.length === 0) {
+    missingAssetsPromptSignature = null;
+    return;
+  }
+
+  const signature = info.missing_assets.map((item) => item.asset_id).join("|");
+  if (missingAssetsPromptSignature === signature) {
+    return;
+  }
+
+  missingAssetsPromptSignature = signature;
+  $.NSApp.activateIgnoringOtherApps(true);
+
+  try {
+    const result = app.displayDialog(
+      `Tahoe Aerial Scheduler is installed, but these Tahoe clips still need to be downloaded in Wallpaper settings:\n\n${missingAssetsSummary(info)}\n\nClick the download button for those Tahoe Aerials, then the scheduler will be able to use them.`,
+      {
+        buttons: ["Later", "Open Wallpaper Settings"],
+        defaultButton: "Open Wallpaper Settings",
+        withTitle: "Tahoe Downloads Needed",
+      }
+    );
+
+    if (result.buttonReturned === "Open Wallpaper Settings") {
+      openWallpaperSettings();
+    }
+  } catch (error) {
+    logMessage(`missing asset prompt dismissed: ${error}`);
+  }
+}
+
 function refreshMenu() {
   try {
     const info = loadInfo();
@@ -151,6 +193,12 @@ function refreshMenu() {
 
     const menu = $.NSMenu.alloc.initWithTitle(nsString("Tahoe Aerial"));
     menu.setAutoenablesItems(false);
+
+    if (info.missing_assets && info.missing_assets.length > 0) {
+      menu.addItem(standardMenuItem("Tahoe downloads needed", null, null, false));
+      menu.addItem(standardMenuItem("Open Wallpaper Settings", "openWallpaperSettings:", delegate, true));
+      menu.addItem(separator());
+    }
 
     menu.addItem(
       standardMenuItem(`Now: ${shortAssetLabel(info, info.current_slot.asset_key)}`, null, null, false)
@@ -193,6 +241,7 @@ function refreshMenu() {
     menu.addItem(standardMenuItem("Quit Tahoe Menu", "quitApp:", delegate, true));
 
     statusItem.setMenu(menu);
+    maybePromptForMissingAssets(info);
     logMessage(`refreshed menu for ${info.current_slot.asset_key}`);
   } catch (error) {
     if (!statusItem) {
@@ -273,6 +322,13 @@ ObjC.registerSubclass({
       },
     },
 
+    "openWallpaperSettings:": {
+      types: ["void", ["id"]],
+      implementation: function () {
+        openWallpaperSettings();
+      },
+    },
+
     "quitApp:": {
       types: ["void", ["id"]],
       implementation: function () {
@@ -299,4 +355,3 @@ function run() {
   logMessage("menu app started");
   $.NSApp.run();
 }
-

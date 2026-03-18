@@ -17,6 +17,15 @@ APP_DIR = Path(
 )
 CONFIG_PATH = APP_DIR / "config.json"
 STATE_PATH = APP_DIR / "state.json"
+AERIAL_VIDEOS_DIR = (
+    Path.home()
+    / "Library"
+    / "Application Support"
+    / "com.apple.wallpaper"
+    / "aerials"
+    / "videos"
+)
+WALLPAPER_SETTINGS_URL = "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension"
 LIVE_PLIST = (
     Path.home()
     / "Library"
@@ -192,6 +201,50 @@ def asset_from_key(config: dict, asset_key: str) -> dict:
     return config["assets"][asset_key]
 
 
+def scheduled_asset_keys(config: dict) -> list[str]:
+    return list(dict.fromkeys(item["asset"] for item in config["schedule"]))
+
+
+def asset_video_path(asset_id: str) -> Path:
+    return AERIAL_VIDEOS_DIR / f"{asset_id}.mov"
+
+
+def missing_assets(config: dict) -> list[dict]:
+    results = []
+    for asset_key in scheduled_asset_keys(config):
+        asset = asset_from_key(config, asset_key)
+        video_path = asset_video_path(asset["asset_id"])
+        if not video_path.exists():
+            results.append(
+                {
+                    "asset_key": asset_key,
+                    "label": asset["label"],
+                    "asset_id": asset["asset_id"],
+                    "video_path": str(video_path),
+                }
+            )
+    return results
+
+
+def missing_assets_message(items: list[dict]) -> str:
+    labels = ", ".join(item["label"] for item in items)
+    return (
+        "Tahoe Aerial downloads still needed: "
+        f"{labels}. Open System Settings > Wallpaper and click the download "
+        "button for those Tahoe Aerials."
+    )
+
+
+def ensure_asset_is_downloaded(asset: dict) -> None:
+    video_path = asset_video_path(asset["asset_id"])
+    if video_path.exists():
+        return
+    raise RuntimeError(
+        f"{asset['label']} is not downloaded yet. Open System Settings > Wallpaper "
+        "and download that Tahoe Aerial before using it."
+    )
+
+
 def load_plist(path: Path) -> dict:
     with path.open("rb") as handle:
         return plistlib.load(handle)
@@ -319,6 +372,7 @@ def apply_current_schedule() -> int:
     config = load_config()
     slot = slot_for_now(config)
     asset = asset_from_key(config, slot.asset_key)
+    ensure_asset_is_downloaded(asset)
     desired_asset_id = asset["asset_id"]
     active_asset_id = current_asset_id()
     active_legacy_asset_id = legacy_asset_id()
@@ -376,6 +430,7 @@ def print_info_json() -> int:
     slot = slot_for_now(config)
     following = next_slot(config, slot)
     state = read_state()
+    missing = missing_assets(config)
 
     payload = {
         "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -401,6 +456,8 @@ def print_info_json() -> int:
             for item in sorted_slots(config)
         ],
         "assets": config["assets"],
+        "missing_assets": missing,
+        "wallpaper_settings_url": WALLPAPER_SETTINGS_URL,
         "index_v2_asset_id": current_asset_id(),
         "index_asset_id": legacy_asset_id(),
         "last_applied_asset": state.get("last_applied_asset"),
@@ -417,6 +474,7 @@ def print_status() -> int:
     active_asset = current_asset_id()
     legacy_asset = legacy_asset_id()
     state = read_state()
+    missing = missing_assets(config)
 
     print(f"Config: {CONFIG_PATH}")
     print(f"Current time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -426,6 +484,28 @@ def print_status() -> int:
     print(f"Index asset ID: {legacy_asset or 'unknown'}")
     print(f"Last applied asset: {state.get('last_applied_asset', 'none')}")
     print(f"Last applied at: {state.get('last_applied_at', 'never')}")
+    if missing:
+        print(missing_assets_message(missing))
+    return 0
+
+
+def print_missing_assets() -> int:
+    config = load_config()
+    missing = missing_assets(config)
+    if missing:
+        print(missing_assets_message(missing))
+    return 0
+
+
+def print_missing_assets_json() -> int:
+    config = load_config()
+    print(json.dumps(missing_assets(config)))
+    return 0
+
+
+def open_wallpaper_settings() -> int:
+    subprocess.run(["open", WALLPAPER_SETTINGS_URL], check=False)
+    print("Opened Wallpaper settings.")
     return 0
 
 
@@ -490,6 +570,7 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(
             "Usage: scheduler.py [apply|status|show-schedule|list-assets|info-json|"
+            "missing-assets|missing-assets-json|open-wallpaper-settings|"
             "set-slot HH:MM asset_key|set-start-time OLD_HH:MM NEW_HH:MM]"
         )
         return 1
@@ -506,6 +587,12 @@ def main(argv: list[str]) -> int:
             return print_assets()
         if command == "info-json":
             return print_info_json()
+        if command == "missing-assets":
+            return print_missing_assets()
+        if command == "missing-assets-json":
+            return print_missing_assets_json()
+        if command == "open-wallpaper-settings":
+            return open_wallpaper_settings()
         if command == "set-slot":
             if len(argv) != 4:
                 print("Usage: scheduler.py set-slot HH:MM asset_key")
@@ -525,4 +612,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
-

@@ -145,6 +145,10 @@ main() {
   "${APP_SUPPORT_DIR}/run-scheduler.sh" apply >/dev/null 2>&1 || true
   open -n "${MENU_APP_PATH}" >/dev/null 2>&1 || true
 
+  set +e
+  missing_assets_output="$("${APP_SUPPORT_DIR}/run-scheduler.sh" missing-assets 2>/dev/null)"
+  set -e
+
   cat <<EOF
 Installed Tahoe Aerial Scheduler.
 
@@ -164,6 +168,11 @@ Config:
 Uninstall:
   ${APP_SUPPORT_DIR}/uninstall.sh
 EOF
+
+  if [[ -n "${missing_assets_output}" ]]; then
+    echo ""
+    echo "${missing_assets_output}"
+  fi
 }
 
 main "$@"
