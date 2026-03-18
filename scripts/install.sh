@@ -42,6 +42,20 @@ bootout_if_loaded() {
   launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
 }
 
+stop_menu_app() {
+  local pattern="${MENU_APP_PATH}/Contents/MacOS/applet"
+  pkill -f "${pattern}" >/dev/null 2>&1 || true
+
+  local attempts=0
+  while pgrep -f "${pattern}" >/dev/null 2>&1; do
+    attempts=$((attempts + 1))
+    if [[ "${attempts}" -ge 20 ]]; then
+      break
+    fi
+    sleep 0.2
+  done
+}
+
 write_scheduler_runner() {
   local python_path="$1"
 
@@ -135,6 +149,7 @@ main() {
   write_scheduler_plist
   write_menu_plist
 
+  stop_menu_app
   bootout_if_loaded "${SCHEDULER_LABEL}" "${SCHEDULER_PLIST}"
   bootout_if_loaded "${MENU_LABEL}" "${MENU_PLIST}"
 
@@ -143,7 +158,6 @@ main() {
   launchctl kickstart -k "gui/$(id -u)/${SCHEDULER_LABEL}" >/dev/null 2>&1 || true
 
   "${APP_SUPPORT_DIR}/run-scheduler.sh" apply >/dev/null 2>&1 || true
-  open -n "${MENU_APP_PATH}" >/dev/null 2>&1 || true
 
   set +e
   missing_assets_output="$("${APP_SUPPORT_DIR}/run-scheduler.sh" missing-assets 2>/dev/null)"
