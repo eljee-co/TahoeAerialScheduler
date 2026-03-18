@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a bug in the scheduler, menu app, installer, or release flow.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Tell us what you expected and what actually happened.
+    validations:
+      required: true
+
+  - type: input
+    id: macos_version
+    attributes:
+      label: macOS version
+      placeholder: e.g. macOS Tahoe 26.0 beta
+
+  - type: dropdown
+    id: aerials_downloaded
+    attributes:
+      label: Were the Tahoe Aerials already downloaded in System Settings?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run ...
+        2. Open ...
+        3. Click ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: Include anything helpful from scheduler.log, menu-ui.log, or screenshots.
+

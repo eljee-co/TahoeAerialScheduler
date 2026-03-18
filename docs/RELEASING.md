@@ -1,12 +1,17 @@
 # Releasing Tahoe Aerial Scheduler
 
+This file is intentionally kept in the repo as a maintainer checklist for future GitHub releases.
+
 ## Before The First Public Release
 
-- Choose a license
 - Add screenshots or a short screen recording
 - Confirm the installer works on a second Mac or a clean user account
 - Confirm all four Tahoe Aerials are downloaded before install
 - Decide whether you want to keep the current `com.eljee...` launch-agent labels or rename them before publishing
+
+## Current License
+
+The project is now licensed under MIT.
 
 ## Release Checklist
 
@@ -53,4 +58,3 @@
 - add a friendlier settings window
 - add signed and notarized release artifacts
 - add an icon for the app bundle itself
-

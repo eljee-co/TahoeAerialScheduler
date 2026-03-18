@@ -14,6 +14,8 @@ This is a GitHub-shareable source project for the working prototype we built loc
 
 It is not yet a polished signed/notarized consumer app, and it relies on macOS's current internal wallpaper store format.
 
+The maintainer docs in `docs/RELEASING.md` are intentionally kept in the repo so future releases stay repeatable instead of living only in chat history.
+
 ## Features
 
 - Uses native Apple Tahoe Aerials, not still-image dynamic wallpapers
@@ -37,6 +39,10 @@ That appears to be caused by macOS reloading `WallpaperAgent` when the native Ae
 
 - true native Aerial behavior
 - a brief transition flash
+
+## License
+
+This project is licensed under the MIT License. That means people can use, modify, and share it pretty freely, while keeping the standard no-warranty disclaimer in place.
 
 ## Install
 
@@ -151,9 +157,8 @@ The cleanest v1 release path is:
 
 1. Keep this repo as the source of truth.
 2. Test `./scripts/install.sh` on at least one clean user account or second Mac.
-3. Choose a license.
-4. Add screenshots or a short demo GIF.
-5. Create a GitHub release zip with:
+3. Add screenshots or a short demo GIF.
+4. Create a GitHub release zip with:
 
 ```bash
 ./scripts/package-release.sh v0.1.0
@@ -161,3 +166,6 @@ The cleanest v1 release path is:
 
 For the full checklist, see [docs/RELEASING.md](docs/RELEASING.md).
 
+## Contributing
+
+If you want to improve the project, see [CONTRIBUTING.md](CONTRIBUTING.md).
