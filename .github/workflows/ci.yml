@@ -32,6 +32,8 @@ jobs:
       - name: Build menu app
         run: ./scripts/build-menu-app.sh
 
+      - name: Build installer app
+        run: ./scripts/build-installer-app.sh
+
       - name: Build release archive
         run: ./scripts/package-release.sh ci
-

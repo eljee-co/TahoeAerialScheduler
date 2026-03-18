@@ -46,6 +46,20 @@ This project is licensed under the MIT License. That means people can use, modif
 
 ## Install
 
+### End-User Install
+
+The intended release artifact for end users is a DMG containing a double-click installer app.
+
+End-user flow:
+
+- download the DMG from GitHub Releases
+- open it
+- double-click `Install Tahoe Aerial Scheduler.app`
+
+Because the app is not signed or notarized yet, macOS may warn the first time. If that happens, right-click the installer app and choose `Open`.
+
+### Developer Install
+
 From the repo root:
 
 ```bash
@@ -64,13 +78,13 @@ This installs the runtime files to:
 Keep your config:
 
 ```bash
-./scripts/uninstall.sh
+"$HOME/Library/Application Support/TahoeAerialScheduler/uninstall.sh"
 ```
 
 Remove everything:
 
 ```bash
-./scripts/uninstall.sh --purge
+"$HOME/Library/Application Support/TahoeAerialScheduler/uninstall.sh" --purge
 ```
 
 ## Development Workflow
@@ -107,8 +121,10 @@ If you just want to compile the menu app artifact:
   - removes the app and launch agents
 - `scripts/build-menu-app.sh`
   - builds the menu app into `dist/`
+- `scripts/build-installer-app.sh`
+  - builds the double-click installer app into `dist/`
 - `scripts/package-release.sh`
-  - creates a GitHub release zip
+  - creates the end-user DMG release artifact
 - `docs/RELEASING.md`
   - GitHub release checklist
 
@@ -158,7 +174,7 @@ The cleanest v1 release path is:
 1. Keep this repo as the source of truth.
 2. Test `./scripts/install.sh` on at least one clean user account or second Mac.
 3. Add screenshots or a short demo GIF.
-4. Create a GitHub release zip with:
+4. Create the end-user DMG with:
 
 ```bash
 ./scripts/package-release.sh v0.1.0

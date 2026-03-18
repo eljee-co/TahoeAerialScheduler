@@ -11,21 +11,27 @@ if [[ -z "${VERSION}" ]]; then
   exit 1
 fi
 
-STAGING_DIR="${REPO_ROOT}/dist/TahoeAerialScheduler-${VERSION}"
-ARCHIVE_PATH="${REPO_ROOT}/dist/TahoeAerialScheduler-${VERSION}.zip"
+INSTALLER_APP_PATH="${REPO_ROOT}/dist/Install Tahoe Aerial Scheduler.app"
+DMG_STAGING_DIR="${REPO_ROOT}/dist/.dmg-staging-${VERSION}"
+DMG_PATH="${REPO_ROOT}/dist/TahoeAerialScheduler-${VERSION}.dmg"
 
-rm -rf "${STAGING_DIR}" "${ARCHIVE_PATH}"
+rm -rf "${DMG_STAGING_DIR}" "${DMG_PATH}" "${INSTALLER_APP_PATH}"
 mkdir -p "${REPO_ROOT}/dist"
 
-rsync -a \
-  --exclude '.git' \
-  --exclude 'dist' \
-  --exclude '__pycache__' \
-  --exclude '*.pyc' \
-  "${REPO_ROOT}/" "${STAGING_DIR}/"
+"${REPO_ROOT}/scripts/build-installer-app.sh" "${INSTALLER_APP_PATH}"
 
-(cd "${REPO_ROOT}/dist" && zip -rq "TahoeAerialScheduler-${VERSION}.zip" "TahoeAerialScheduler-${VERSION}")
+mkdir -p "${DMG_STAGING_DIR}"
+cp -R "${INSTALLER_APP_PATH}" "${DMG_STAGING_DIR}/"
+install -m 644 "${REPO_ROOT}/resources/dmg-readme.txt" "${DMG_STAGING_DIR}/Read Me.txt"
 
-echo "Created release archive:"
-echo "  ${ARCHIVE_PATH}"
+hdiutil create \
+  -volname "Tahoe Aerial Scheduler" \
+  -srcfolder "${DMG_STAGING_DIR}" \
+  -format UDZO \
+  -ov \
+  "${DMG_PATH}" >/dev/null
 
+rm -rf "${DMG_STAGING_DIR}"
+
+echo "Created end-user release artifact:"
+echo "  ${DMG_PATH}"

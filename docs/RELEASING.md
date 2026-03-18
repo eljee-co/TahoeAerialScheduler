@@ -28,8 +28,9 @@ The project is now licensed under MIT.
 - changing a slot's start time works
 - the scheduler applies the correct current clip
 - reinstalling preserves `config.json`
+- the installed copy includes `~/Library/Application Support/TahoeAerialScheduler/uninstall.sh`
 
-3. Build the release archive:
+3. Build the installer app and DMG:
 
 ```bash
 ./scripts/package-release.sh v0.1.0
@@ -37,12 +38,14 @@ The project is now licensed under MIT.
 
 4. Create a GitHub release and upload:
 
-- `dist/TahoeAerialScheduler-v0.1.0.zip`
+- `dist/TahoeAerialScheduler-v0.1.0.dmg`
 
 5. In the GitHub release notes, tell users:
 
 - this is a per-user installer
+- the release artifact is a DMG with a double-click installer app
 - Tahoe Aerials must already be downloaded in System Settings
+- the installer is not signed/notarized yet, so macOS may require right-click `Open` the first time
 - a brief grey flash during switching is a known limitation
 
 ## Suggested README Additions Before Publishing

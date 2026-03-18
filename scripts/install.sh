@@ -119,6 +119,9 @@ main() {
 
   install -m 755 "${REPO_ROOT}/src/scheduler.py" "${APP_SUPPORT_DIR}/scheduler.py"
   install -m 644 "${REPO_ROOT}/src/TahoeAerialMenu.js" "${APP_SUPPORT_DIR}/TahoeAerialMenu.js"
+  if [[ -f "${REPO_ROOT}/scripts/uninstall.sh" ]]; then
+    install -m 755 "${REPO_ROOT}/scripts/uninstall.sh" "${APP_SUPPORT_DIR}/uninstall.sh"
+  fi
 
   if [[ ! -f "${APP_SUPPORT_DIR}/config.json" ]]; then
     install -m 644 "${REPO_ROOT}/resources/default-config.json" "${APP_SUPPORT_DIR}/config.json"
@@ -157,8 +160,10 @@ Launch agents:
 
 Config:
   ${APP_SUPPORT_DIR}/config.json
+
+Uninstall:
+  ${APP_SUPPORT_DIR}/uninstall.sh
 EOF
 }
 
 main "$@"
-

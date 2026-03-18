@@ -55,10 +55,15 @@ Compile the menu app:
 ./scripts/build-menu-app.sh
 ```
 
+Build the installer app:
+
+```bash
+./scripts/build-installer-app.sh
+```
+
 ## What To Mention In Pull Requests
 
 - what changed
 - how you tested it
 - whether you tested on a clean user account or only on an existing install
 - whether the change affects the menu bar app, scheduler, installer, or release flow
-
