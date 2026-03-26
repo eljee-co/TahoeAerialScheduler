@@ -38,17 +38,32 @@ The project is now licensed under MIT.
 ./scripts/package-release.sh v0.1.0
 ```
 
-4. Create a GitHub release and upload:
+4. Push the release tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+5. Confirm GitHub Actions created the release and attached:
 
 - `dist/TahoeAerialScheduler-v0.1.0.dmg`
 
-5. In the GitHub release notes, tell users:
+6. In the GitHub release notes, tell users:
 
 - this is a per-user installer
 - the release artifact is a DMG with a double-click installer app
 - if Tahoe Aerials are missing, the app will prompt the user to open Wallpaper settings and download them
 - the installer is not signed/notarized yet, so macOS may require right-click `Open` the first time
 - a brief grey flash during switching is a known limitation
+
+## Manual Fallback
+
+If the automated release workflow fails for any reason, you can still:
+
+1. run `./scripts/package-release.sh v0.1.0`
+2. create the GitHub Release manually
+3. upload `dist/TahoeAerialScheduler-v0.1.0.dmg`
 
 ## Suggested README Additions Before Publishing
 

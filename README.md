@@ -176,14 +176,29 @@ The cleanest v1 release path is:
 
 1. Keep this repo as the source of truth.
 2. Test `./scripts/install.sh` on at least one clean user account or second Mac.
-3. Add screenshots or a short demo GIF.
-4. Create the end-user DMG with:
+3. Push a version tag like `v0.1.0` to trigger the automated GitHub Release workflow.
+4. Optionally add screenshots or a short demo GIF.
+
+If you want to build the DMG locally before tagging, you can still run:
 
 ```bash
 ./scripts/package-release.sh v0.1.0
 ```
 
 For the full checklist, see [docs/RELEASING.md](docs/RELEASING.md).
+
+## Automated Releases
+
+Pushing a tag that starts with `v` now triggers the release workflow in `.github/workflows/release.yml`.
+
+Example:
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+That workflow builds `TahoeAerialScheduler-v0.1.1.dmg`, creates a GitHub Release if needed, and attaches the DMG automatically.
 
 ## Contributing
 
