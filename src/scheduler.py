@@ -375,9 +375,12 @@ def apply_current_schedule() -> int:
     ensure_asset_is_downloaded(asset)
     desired_asset_id = asset["asset_id"]
     active_asset_id = current_asset_id()
-    active_legacy_asset_id = legacy_asset_id()
 
-    if active_asset_id == desired_asset_id and active_legacy_asset_id == desired_asset_id:
+    # Only the live desktop choice should decide whether we need to restart the
+    # wallpaper pipeline. Linked/idle stores can drift independently, and
+    # forcing a full reapply for those mismatches causes unnecessary visible
+    # resets on the desktop.
+    if active_asset_id == desired_asset_id:
         write_state(
             {
                 "last_applied_asset": slot.asset_key,
