@@ -4,8 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Initial GitHub-ready project setup in progress
-- Added a double-click installer app and DMG packaging flow for end users
+## [0.1.2] - 2026-04-26
+
+- Refresh the active wallpaper slot when the macOS wallpaper store timestamp is stale
+- Convert the legacy linked wallpaper store entry from shuffle/default mode to the selected Tahoe Aerial asset
+- Check the live Aerial player process so stale Day video playback is detected during the Morning slot
+- Add scheduler regression tests for the morning slot boundary
 
 ## [0.1.0] - 2026-03-18
 

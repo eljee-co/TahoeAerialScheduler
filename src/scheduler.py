@@ -6,7 +6,7 @@ import plistlib
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 APP_DIR = Path(
@@ -44,6 +44,7 @@ LEGACY_PLIST = (
 )
 
 WALLPAPER_AGENT_LABEL = f"gui/{os.getuid()}/com.apple.wallpaper.agent"
+AERIAL_EXTENSION_PROCESS = "WallpaperAerialsExtension"
 AERIAL_PROVIDER = "com.apple.wallpaper.choice.aerials"
 
 DEFAULT_ASSETS = {
@@ -282,23 +283,61 @@ def configuration_blob(asset_id: str) -> bytes:
     return plistlib.dumps({"assetID": asset_id}, fmt=plistlib.FMT_BINARY)
 
 
-def update_choice(choice: dict, asset_id: str) -> bool:
-    if choice.get("Provider") != AERIAL_PROVIDER:
-        return False
-    choice["Configuration"] = configuration_blob(asset_id)
-    choice.setdefault("Files", [])
-    return True
-
-
-def update_content_container(container: dict, asset_id: str) -> bool:
-    choices = container.get("Content", {}).get("Choices", [])
+def update_choice(
+    choice: dict,
+    asset_id: str,
+    allow_provider_conversion: bool = False,
+) -> bool:
+    provider = choice.get("Provider")
     changed = False
-    for choice in choices:
-        changed = update_choice(choice, asset_id) or changed
+    if provider != AERIAL_PROVIDER:
+        if not allow_provider_conversion or provider != "default":
+            return False
+        choice["Provider"] = AERIAL_PROVIDER
+        changed = True
+
+    configuration = configuration_blob(asset_id)
+    if choice.get("Configuration") != configuration:
+        choice["Configuration"] = configuration
+        changed = True
+
+    if choice.get("Files") != []:
+        choice["Files"] = []
+        changed = True
+
     return changed
 
 
-def update_store_sections(store: dict, asset_id: str) -> bool:
+def update_content_container(
+    container: dict,
+    asset_id: str,
+    applied_at: datetime,
+    allow_provider_conversion: bool = False,
+) -> bool:
+    content = container.get("Content", {})
+    choices = content.get("Choices", [])
+    changed = False
+    has_managed_choice = False
+    for choice in choices:
+        changed = update_choice(choice, asset_id, allow_provider_conversion) or changed
+        has_managed_choice = choice.get("Provider") == AERIAL_PROVIDER or has_managed_choice
+
+    if has_managed_choice and "EncodedOptionValues" in content:
+        content.pop("EncodedOptionValues", None)
+        changed = True
+
+    if changed:
+        container["LastSet"] = applied_at
+        container["LastUse"] = applied_at
+    return changed
+
+
+def update_store_sections(
+    store: dict,
+    asset_id: str,
+    applied_at: datetime,
+    allow_provider_conversion: bool = False,
+) -> bool:
     changed = False
     for root_key in ("AllSpacesAndDisplays", "SystemDefault"):
         section = store.get(root_key)
@@ -308,7 +347,15 @@ def update_store_sections(store: dict, asset_id: str) -> bool:
         for child_key in ("Desktop", "Idle", "Linked"):
             child = section.get(child_key)
             if isinstance(child, dict):
-                changed = update_content_container(child, asset_id) or changed
+                changed = (
+                    update_content_container(
+                        child,
+                        asset_id,
+                        applied_at,
+                        allow_provider_conversion,
+                    )
+                    or changed
+                )
 
     for root_key in ("Displays", "Spaces"):
         root = store.get(root_key)
@@ -321,17 +368,30 @@ def update_store_sections(store: dict, asset_id: str) -> bool:
             for child_key in ("Desktop", "Idle", "Linked"):
                 child = nested.get(child_key)
                 if isinstance(child, dict):
-                    changed = update_content_container(child, asset_id) or changed
+                    changed = (
+                        update_content_container(
+                            child,
+                            asset_id,
+                            applied_at,
+                            allow_provider_conversion,
+                        )
+                        or changed
+                    )
 
     return changed
 
 
-def write_updated_plist(path: Path, asset_id: str) -> bool:
+def write_updated_plist(
+    path: Path,
+    asset_id: str,
+    applied_at: datetime,
+    allow_provider_conversion: bool = False,
+) -> bool:
     if not path.exists():
         return False
 
     store = load_plist(path)
-    changed = update_store_sections(store, asset_id)
+    changed = update_store_sections(store, asset_id, applied_at, allow_provider_conversion)
     if not changed:
         return False
 
@@ -340,12 +400,88 @@ def write_updated_plist(path: Path, asset_id: str) -> bool:
     return True
 
 
-def write_store(asset_id: str) -> None:
+def write_store(asset_id: str, applied_at: datetime | None = None) -> None:
+    applied_at = applied_at or datetime.now()
     updated_any = False
-    updated_any = write_updated_plist(LIVE_PLIST, asset_id) or updated_any
-    updated_any = write_updated_plist(LEGACY_PLIST, asset_id) or updated_any
+    updated_any = write_updated_plist(LIVE_PLIST, asset_id, applied_at) or updated_any
+    updated_any = (
+        write_updated_plist(
+            LEGACY_PLIST,
+            asset_id,
+            applied_at,
+            allow_provider_conversion=True,
+        )
+        or updated_any
+    )
     if not updated_any:
         raise RuntimeError("Could not find any native Aerial wallpaper entries to update.")
+
+
+def slot_started_at(current: datetime, slot: Slot) -> datetime:
+    started_at = current.replace(
+        hour=slot.minutes // 60,
+        minute=slot.minutes % 60,
+        second=0,
+        microsecond=0,
+    )
+    if started_at > current:
+        return started_at - timedelta(days=1)
+    return started_at
+
+
+def active_desktop_last_set_at() -> datetime | None:
+    try:
+        store = load_plist(LIVE_PLIST)
+        last_set = store["AllSpacesAndDisplays"]["Desktop"].get("LastSet")
+        if isinstance(last_set, datetime):
+            if last_set.tzinfo is not None:
+                return last_set.astimezone().replace(tzinfo=None)
+            return last_set
+    except Exception:
+        return None
+    return None
+
+
+def active_store_needs_refresh(slot: Slot, current: datetime, last_set: datetime | None) -> bool:
+    if last_set is None:
+        return True
+    return last_set < slot_started_at(current, slot)
+
+
+def asset_id_from_video_path(path: str) -> str | None:
+    video_path = Path(path)
+    if video_path.parent == AERIAL_VIDEOS_DIR and video_path.suffix == ".mov":
+        return video_path.stem
+    return None
+
+
+def active_aerial_video_id() -> str | None:
+    pgrep_result = subprocess.run(
+        ["pgrep", AERIAL_EXTENSION_PROCESS],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pgrep_result.returncode != 0:
+        return None
+
+    for pid in pgrep_result.stdout.split():
+        lsof_result = subprocess.run(
+            ["lsof", "-Fn", "-p", pid],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if lsof_result.returncode != 0:
+            continue
+
+        for line in lsof_result.stdout.splitlines():
+            if not line.startswith("n"):
+                continue
+            asset_id = asset_id_from_video_path(line[1:])
+            if asset_id:
+                return asset_id
+    return None
 
 
 def restart_wallpaper_agent() -> None:
@@ -354,8 +490,19 @@ def restart_wallpaper_agent() -> None:
         capture_output=True,
         text=True,
     )
+    subprocess.run(
+        ["killall", AERIAL_EXTENSION_PROCESS],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
     if result.returncode != 0:
-        subprocess.run(["killall", "WallpaperAgent"], check=False)
+        subprocess.run(
+            ["killall", "WallpaperAgent"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
 
 
 def read_state() -> dict:
@@ -370,17 +517,24 @@ def write_state(payload: dict) -> None:
 
 def apply_current_schedule() -> int:
     config = load_config()
-    slot = slot_for_now(config)
+    current = datetime.now()
+    slot = slot_for_now(config, current)
     asset = asset_from_key(config, slot.asset_key)
     ensure_asset_is_downloaded(asset)
     desired_asset_id = asset["asset_id"]
     active_asset_id = current_asset_id()
+    active_is_stale = active_store_needs_refresh(slot, current, active_desktop_last_set_at())
+    active_video_id = active_aerial_video_id()
+    active_video_is_stale = active_video_id is not None and active_video_id != desired_asset_id
 
     # Only the live desktop choice should decide whether we need to restart the
     # wallpaper pipeline. Linked/idle stores can drift independently, and
     # forcing a full reapply for those mismatches causes unnecessary visible
-    # resets on the desktop.
-    if active_asset_id == desired_asset_id:
+    # resets on the desktop. A stale LastSet still needs a one-time refresh so
+    # WallpaperAgent reloads the current slot after waking or cache drift. The
+    # Aerial extension can also keep playing its previous .mov after the plist
+    # changes, so verify the actual player process when it is visible.
+    if active_asset_id == desired_asset_id and not active_is_stale and not active_video_is_stale:
         write_state(
             {
                 "last_applied_asset": slot.asset_key,
@@ -391,7 +545,7 @@ def apply_current_schedule() -> int:
         print(f"Already active: {asset['label']} ({slot.asset_key})")
         return 0
 
-    write_store(desired_asset_id)
+    write_store(desired_asset_id, current)
     restart_wallpaper_agent()
     write_state(
         {
@@ -400,7 +554,8 @@ def apply_current_schedule() -> int:
             "last_applied_at": datetime.now().isoformat(timespec="seconds"),
         }
     )
-    print(f"Applied {asset['label']} ({slot.asset_key}) for schedule starting {slot.start}.")
+    action = "Refreshed" if active_asset_id == desired_asset_id else "Applied"
+    print(f"{action} {asset['label']} ({slot.asset_key}) for schedule starting {slot.start}.")
     return 0
 
 
@@ -463,6 +618,7 @@ def print_info_json() -> int:
         "wallpaper_settings_url": WALLPAPER_SETTINGS_URL,
         "index_v2_asset_id": current_asset_id(),
         "index_asset_id": legacy_asset_id(),
+        "active_aerial_video_id": active_aerial_video_id(),
         "last_applied_asset": state.get("last_applied_asset"),
         "last_applied_at": state.get("last_applied_at"),
     }
@@ -476,6 +632,7 @@ def print_status() -> int:
     asset = asset_from_key(config, slot.asset_key)
     active_asset = current_asset_id()
     legacy_asset = legacy_asset_id()
+    active_video = active_aerial_video_id()
     state = read_state()
     missing = missing_assets(config)
 
@@ -485,6 +642,7 @@ def print_status() -> int:
     print(f"Scheduled start: {slot.start}")
     print(f"Index_v2 asset ID: {active_asset or 'unknown'}")
     print(f"Index asset ID: {legacy_asset or 'unknown'}")
+    print(f"Active aerial video ID: {active_video or 'unknown'}")
     print(f"Last applied asset: {state.get('last_applied_asset', 'none')}")
     print(f"Last applied at: {state.get('last_applied_at', 'never')}")
     if missing:
