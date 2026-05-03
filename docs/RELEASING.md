@@ -6,7 +6,7 @@ This file is intentionally kept in the repo as a maintainer checklist for future
 
 - Add screenshots or a short screen recording
 - Confirm the installer works on a second Mac or a clean user account
-- Confirm the missing-download prompt behaves correctly when Tahoe Aerials are not downloaded yet
+- Confirm the missing-download prompt appears only when the current scheduled Tahoe Aerial is not downloaded yet
 - Decide whether you want to keep the current `com.eljee...` launch-agent labels or rename them before publishing
 
 ## Current License
@@ -24,11 +24,14 @@ The project is now licensed under MIT.
 2. Verify:
 
 - the menu bar item appears
-- a missing-download prompt appears if Tahoe clips are not yet downloaded
+- a missing-download prompt appears if the current scheduled Tahoe clip is not yet downloaded
+- missing future Tahoe clips do not prompt until their schedule block is active
 - `Open Wallpaper Settings` opens the Wallpaper settings page
 - changing a slot from the menu updates the config
 - changing a slot's start time works
 - the scheduler applies the correct current clip
+- scheduled clip changes preserve native Aerial lock-screen video behavior
+- a brief grey flash during switching is still treated as a known limitation
 - reinstalling preserves `config.json`
 - the installed copy includes `~/Library/Application Support/TahoeAerialScheduler/uninstall.sh`
 
@@ -53,7 +56,7 @@ git push origin v0.1.0
 
 - this is a per-user installer
 - the release artifact is a DMG with a double-click installer app
-- if Tahoe Aerials are missing, the app will prompt the user to open Wallpaper settings and download them
+- if the current scheduled Tahoe Aerial is missing, the app will prompt the user to open Wallpaper settings and download it
 - the installer is not signed/notarized yet, so macOS may require right-click `Open` the first time
 - a brief grey flash during switching is a known limitation
 

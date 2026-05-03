@@ -6,10 +6,10 @@ on run
 
   try
     do shell script quoted form of installerPath
-    set missingAssetsMessage to do shell script quoted form of schedulerRunnerPath & " missing-assets"
+    set missingAssetsMessage to do shell script quoted form of schedulerRunnerPath & " current-missing-assets"
 
     if missingAssetsMessage is not "" then
-      set dialogResult to display dialog "Tahoe Aerial Scheduler is installed, but some Tahoe clips still need to be downloaded.\n\n" & missingAssetsMessage buttons {"Later", "Open Wallpaper Settings"} default button "Open Wallpaper Settings" with title "Tahoe Downloads Needed"
+      set dialogResult to display dialog "Tahoe Aerial Scheduler is installed, but the Tahoe clip it is trying to use still needs to be downloaded.\n\n" & missingAssetsMessage buttons {"Later", "Open Wallpaper Settings"} default button "Open Wallpaper Settings" with title "Tahoe Download Needed"
       if button returned of dialogResult is "Open Wallpaper Settings" then
         do shell script quoted form of schedulerRunnerPath & " open-wallpaper-settings"
       end if

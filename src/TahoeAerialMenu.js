@@ -139,17 +139,22 @@ function representedItem(title, actionName, representedValue, target, enabled = 
   return item;
 }
 
-function missingAssetsSummary(info) {
-  return info.missing_assets.map((item) => item.label).join(", ");
+function currentMissingAssets(info) {
+  return info.current_missing_assets || [];
 }
 
-function maybePromptForMissingAssets(info) {
-  if (!info.missing_assets || info.missing_assets.length === 0) {
+function missingAssetsSummary(info) {
+  return currentMissingAssets(info).map((item) => item.label).join(", ");
+}
+
+function maybePromptForMissingCurrentAssets(info) {
+  const missingAssets = currentMissingAssets(info);
+  if (missingAssets.length === 0) {
     missingAssetsPromptSignature = null;
     return;
   }
 
-  const signature = info.missing_assets.map((item) => item.asset_id).join("|");
+  const signature = missingAssets.map((item) => item.asset_id).join("|");
   if (missingAssetsPromptSignature === signature) {
     return;
   }
@@ -159,7 +164,7 @@ function maybePromptForMissingAssets(info) {
 
   try {
     const result = app.displayDialog(
-      `Tahoe Aerial Scheduler is installed, but these Tahoe clips still need to be downloaded in Wallpaper settings:\n\n${missingAssetsSummary(info)}\n\nClick the download button for those Tahoe Aerials, then the scheduler will be able to use them.`,
+      `Tahoe Aerial Scheduler is trying to use this Tahoe clip, but it still needs to be downloaded in Wallpaper settings:\n\n${missingAssetsSummary(info)}\n\nClick the download button for that Tahoe Aerial, then the scheduler will be able to use it.`,
       {
         buttons: ["Later", "Open Wallpaper Settings"],
         defaultButton: "Open Wallpaper Settings",
@@ -194,8 +199,8 @@ function refreshMenu() {
     const menu = $.NSMenu.alloc.initWithTitle(nsString("Tahoe Aerial"));
     menu.setAutoenablesItems(false);
 
-    if (info.missing_assets && info.missing_assets.length > 0) {
-      menu.addItem(standardMenuItem("Tahoe downloads needed", null, null, false));
+    if (currentMissingAssets(info).length > 0) {
+      menu.addItem(standardMenuItem("Current Tahoe download needed", null, null, false));
       menu.addItem(standardMenuItem("Open Wallpaper Settings", "openWallpaperSettings:", delegate, true));
       menu.addItem(separator());
     }
@@ -241,7 +246,7 @@ function refreshMenu() {
     menu.addItem(standardMenuItem("Quit Tahoe Menu", "quitApp:", delegate, true));
 
     statusItem.setMenu(menu);
-    maybePromptForMissingAssets(info);
+    maybePromptForMissingCurrentAssets(info);
     logMessage(`refreshed menu for ${info.current_slot.asset_key}`);
   } catch (error) {
     if (!statusItem) {
