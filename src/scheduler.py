@@ -46,6 +46,7 @@ LEGACY_PLIST = (
 WALLPAPER_AGENT_LABEL = f"gui/{os.getuid()}/com.apple.wallpaper.agent"
 AERIAL_EXTENSION_PROCESS = "WallpaperAerialsExtension"
 AERIAL_PROVIDER = "com.apple.wallpaper.choice.aerials"
+LEGACY_CONVERTIBLE_PROVIDERS = {"default", "com.apple.wallpaper.choice.image"}
 
 DEFAULT_ASSETS = {
     "tahoe_night": {
@@ -210,21 +211,34 @@ def asset_video_path(asset_id: str) -> Path:
     return AERIAL_VIDEOS_DIR / f"{asset_id}.mov"
 
 
+def missing_asset_entry(config: dict, asset_key: str) -> dict | None:
+    asset = asset_from_key(config, asset_key)
+    video_path = asset_video_path(asset["asset_id"])
+    if video_path.exists():
+        return None
+    return {
+        "asset_key": asset_key,
+        "label": asset["label"],
+        "asset_id": asset["asset_id"],
+        "video_path": str(video_path),
+    }
+
+
 def missing_assets(config: dict) -> list[dict]:
     results = []
     for asset_key in scheduled_asset_keys(config):
-        asset = asset_from_key(config, asset_key)
-        video_path = asset_video_path(asset["asset_id"])
-        if not video_path.exists():
-            results.append(
-                {
-                    "asset_key": asset_key,
-                    "label": asset["label"],
-                    "asset_id": asset["asset_id"],
-                    "video_path": str(video_path),
-                }
-            )
+        missing = missing_asset_entry(config, asset_key)
+        if missing:
+            results.append(missing)
     return results
+
+
+def current_missing_assets(config: dict, now: datetime | None = None) -> list[dict]:
+    slot = slot_for_now(config, now)
+    missing = missing_asset_entry(config, slot.asset_key)
+    if missing:
+        return [missing]
+    return []
 
 
 def missing_assets_message(items: list[dict]) -> str:
@@ -273,10 +287,18 @@ def current_asset_id() -> str | None:
 def legacy_asset_id() -> str | None:
     try:
         store = load_plist(LEGACY_PLIST)
-        choice = store["AllSpacesAndDisplays"]["Linked"]["Content"]["Choices"][0]
-        return decode_asset_id(choice)
+        section = store["AllSpacesAndDisplays"]
+        for child_key in ("Linked", "Idle", "Desktop"):
+            child = section.get(child_key)
+            if not isinstance(child, dict):
+                continue
+            choice = child["Content"]["Choices"][0]
+            asset_id = decode_asset_id(choice)
+            if asset_id:
+                return asset_id
     except Exception:
         return None
+    return None
 
 
 def configuration_blob(asset_id: str) -> bytes:
@@ -291,7 +313,10 @@ def update_choice(
     provider = choice.get("Provider")
     changed = False
     if provider != AERIAL_PROVIDER:
-        if not allow_provider_conversion or provider != "default":
+        if (
+            not allow_provider_conversion
+            or provider not in LEGACY_CONVERTIBLE_PROVIDERS
+        ):
             return False
         choice["Provider"] = AERIAL_PROVIDER
         changed = True
@@ -338,12 +363,8 @@ def update_store_sections(
     applied_at: datetime,
     allow_provider_conversion: bool = False,
 ) -> bool:
-    changed = False
-    for root_key in ("AllSpacesAndDisplays", "SystemDefault"):
-        section = store.get(root_key)
-        if not isinstance(section, dict):
-            continue
-
+    def update_nested_sections(section: dict) -> bool:
+        changed = False
         for child_key in ("Desktop", "Idle", "Linked"):
             child = section.get(child_key)
             if isinstance(child, dict):
@@ -357,26 +378,18 @@ def update_store_sections(
                     or changed
                 )
 
-    for root_key in ("Displays", "Spaces"):
+        for value in section.values():
+            if isinstance(value, dict):
+                changed = update_nested_sections(value) or changed
+
+        return changed
+
+    changed = False
+    for root_key in ("AllSpacesAndDisplays", "SystemDefault", "Displays", "Spaces"):
         root = store.get(root_key)
         if not isinstance(root, dict):
             continue
-
-        for nested in root.values():
-            if not isinstance(nested, dict):
-                continue
-            for child_key in ("Desktop", "Idle", "Linked"):
-                child = nested.get(child_key)
-                if isinstance(child, dict):
-                    changed = (
-                        update_content_container(
-                            child,
-                            asset_id,
-                            applied_at,
-                            allow_provider_conversion,
-                        )
-                        or changed
-                    )
+        changed = update_nested_sections(root) or changed
 
     return changed
 
@@ -446,6 +459,31 @@ def active_store_needs_refresh(slot: Slot, current: datetime, last_set: datetime
     if last_set is None:
         return True
     return last_set < slot_started_at(current, slot)
+
+
+def parse_state_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def state_refreshed_current_slot(
+    slot: Slot,
+    current: datetime,
+    desired_asset_id: str,
+    state: dict,
+) -> bool:
+    if state.get("last_applied_asset_id") != desired_asset_id:
+        return False
+
+    last_applied_at = parse_state_timestamp(state.get("last_applied_at"))
+    if last_applied_at is None:
+        return False
+
+    return last_applied_at >= slot_started_at(current, slot)
 
 
 def asset_id_from_video_path(path: str) -> str | None:
@@ -522,19 +560,31 @@ def apply_current_schedule() -> int:
     asset = asset_from_key(config, slot.asset_key)
     ensure_asset_is_downloaded(asset)
     desired_asset_id = asset["asset_id"]
+    state = read_state()
     active_asset_id = current_asset_id()
     active_is_stale = active_store_needs_refresh(slot, current, active_desktop_last_set_at())
+    stale_refresh_already_done = state_refreshed_current_slot(
+        slot,
+        current,
+        desired_asset_id,
+        state,
+    )
     active_video_id = active_aerial_video_id()
     active_video_is_stale = active_video_id is not None and active_video_id != desired_asset_id
 
     # Only the live desktop choice should decide whether we need to restart the
     # wallpaper pipeline. Linked/idle stores can drift independently, and
     # forcing a full reapply for those mismatches causes unnecessary visible
-    # resets on the desktop. A stale LastSet still needs a one-time refresh so
-    # WallpaperAgent reloads the current slot after waking or cache drift. The
+    # resets on the desktop. A stale LastSet still gets one refresh per slot so
+    # WallpaperAgent reloads after waking or cache drift, but state.json prevents
+    # a stale plist timestamp from causing a visible restart every minute. The
     # Aerial extension can also keep playing its previous .mov after the plist
     # changes, so verify the actual player process when it is visible.
-    if active_asset_id == desired_asset_id and not active_is_stale and not active_video_is_stale:
+    if (
+        active_asset_id == desired_asset_id
+        and (not active_is_stale or stale_refresh_already_done)
+        and not active_video_is_stale
+    ):
         write_state(
             {
                 "last_applied_asset": slot.asset_key,
@@ -589,6 +639,7 @@ def print_info_json() -> int:
     following = next_slot(config, slot)
     state = read_state()
     missing = missing_assets(config)
+    current_missing = current_missing_assets(config)
 
     payload = {
         "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -615,6 +666,7 @@ def print_info_json() -> int:
         ],
         "assets": config["assets"],
         "missing_assets": missing,
+        "current_missing_assets": current_missing,
         "wallpaper_settings_url": WALLPAPER_SETTINGS_URL,
         "index_v2_asset_id": current_asset_id(),
         "index_asset_id": legacy_asset_id(),
@@ -658,9 +710,23 @@ def print_missing_assets() -> int:
     return 0
 
 
+def print_current_missing_assets() -> int:
+    config = load_config()
+    missing = current_missing_assets(config)
+    if missing:
+        print(missing_assets_message(missing))
+    return 0
+
+
 def print_missing_assets_json() -> int:
     config = load_config()
     print(json.dumps(missing_assets(config)))
+    return 0
+
+
+def print_current_missing_assets_json() -> int:
+    config = load_config()
+    print(json.dumps(current_missing_assets(config)))
     return 0
 
 
@@ -731,7 +797,8 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(
             "Usage: scheduler.py [apply|status|show-schedule|list-assets|info-json|"
-            "missing-assets|missing-assets-json|open-wallpaper-settings|"
+            "missing-assets|missing-assets-json|current-missing-assets|"
+            "current-missing-assets-json|open-wallpaper-settings|"
             "set-slot HH:MM asset_key|set-start-time OLD_HH:MM NEW_HH:MM]"
         )
         return 1
@@ -752,6 +819,10 @@ def main(argv: list[str]) -> int:
             return print_missing_assets()
         if command == "missing-assets-json":
             return print_missing_assets_json()
+        if command == "current-missing-assets":
+            return print_current_missing_assets()
+        if command == "current-missing-assets-json":
+            return print_current_missing_assets_json()
         if command == "open-wallpaper-settings":
             return open_wallpaper_settings()
         if command == "set-slot":

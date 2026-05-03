@@ -31,16 +31,15 @@ The maintainer docs in `docs/RELEASING.md` are intentionally kept in the repo so
 - Python 3
 - `osacompile` available on the Mac
 
-If the Tahoe Aerials are not downloaded yet, the installer and menu app will detect that and prompt the user to open Wallpaper settings.
+If the Tahoe Aerial needed for the current schedule block is not downloaded yet, the installer and menu app will prompt the user to open Wallpaper settings. Missing future clips are still reported by the status commands, but they do not trigger a prompt until the scheduler tries to use them.
 
 ## Important Limitation
 
-The wallpaper may briefly flash grey during clip changes.
+The scheduler changes Apple's native Aerial store, then reloads the wallpaper renderer so macOS picks up the new Tahoe clip.
 
-That appears to be caused by macOS reloading `WallpaperAgent` when the native Aerial changes. With the current approach, the tradeoff is:
+That reload may briefly show the default grey background during clip changes.
 
-- true native Aerial behavior
-- a brief transition flash
+We tried using macOS's normal still-image wallpaper setter as a transition mask, but that can break the native Aerial lock-screen video path. The current approach keeps true native Aerial behavior and treats the brief transition flash as a known limitation until a safe live-update path is found.
 
 ## License
 
@@ -57,7 +56,7 @@ End-user flow:
 - download the DMG from GitHub Releases
 - open it
 - double-click `Install Tahoe Aerial Scheduler.app`
-- if Tahoe clips are missing, click `Open Wallpaper Settings` in the prompt and download them there
+- if the current Tahoe clip is missing, click `Open Wallpaper Settings` in the prompt and download it there
 
 Because the app is not signed or notarized yet, macOS may warn the first time. If that happens, right-click the installer app and choose `Open`.
 

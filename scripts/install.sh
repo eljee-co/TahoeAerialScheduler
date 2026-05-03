@@ -160,7 +160,7 @@ main() {
   "${APP_SUPPORT_DIR}/run-scheduler.sh" apply >/dev/null 2>&1 || true
 
   set +e
-  missing_assets_output="$("${APP_SUPPORT_DIR}/run-scheduler.sh" missing-assets 2>/dev/null)"
+  missing_assets_output="$("${APP_SUPPORT_DIR}/run-scheduler.sh" current-missing-assets 2>/dev/null)"
   set -e
 
   cat <<EOF
