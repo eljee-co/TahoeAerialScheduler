@@ -21,6 +21,7 @@ The maintainer docs in `docs/RELEASING.md` are intentionally kept in the repo so
 
 - Uses native Apple Tahoe Aerials, not still-image dynamic wallpapers
 - Schedules different Tahoe clips at different times of day
+- Checks the schedule on wall-clock minute boundaries so configured start times take effect at the named minute
 - Keeps a simple menu bar companion for editing clip assignments and start times
 - Preserves your existing `config.json` on reinstall
 - Installs per-user without touching system-wide locations beyond your own login session

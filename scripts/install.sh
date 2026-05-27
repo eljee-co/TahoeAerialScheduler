@@ -69,7 +69,8 @@ EOF
 }
 
 write_scheduler_plist() {
-  cat > "${SCHEDULER_PLIST}" <<EOF
+  {
+    cat <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -83,8 +84,21 @@ write_scheduler_plist() {
   </array>
   <key>RunAtLoad</key>
   <true/>
-  <key>StartInterval</key>
-  <integer>60</integer>
+  <key>StartCalendarInterval</key>
+  <array>
+EOF
+
+    for minute in {0..59}; do
+      cat <<EOF
+    <dict>
+      <key>Minute</key>
+      <integer>${minute}</integer>
+    </dict>
+EOF
+    done
+
+    cat <<EOF
+  </array>
   <key>WatchPaths</key>
   <array>
     <string>${APP_SUPPORT_DIR}/config.json</string>
@@ -96,6 +110,7 @@ write_scheduler_plist() {
 </dict>
 </plist>
 EOF
+  } > "${SCHEDULER_PLIST}"
 }
 
 write_menu_plist() {
