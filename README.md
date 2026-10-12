@@ -201,7 +201,7 @@ The cleanest v1 release path is:
 If you want to build the DMG locally before tagging, you can still run:
 
 ```bash
-./scripts/package-release.sh v0.1.0
+./scripts/package-release.sh "v$(cat VERSION)"
 ```
 
 For the full checklist, see [docs/RELEASING.md](docs/RELEASING.md).

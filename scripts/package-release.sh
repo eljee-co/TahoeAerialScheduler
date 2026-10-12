@@ -7,7 +7,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 VERSION="${1:-}"
 
 if [[ -z "${VERSION}" ]]; then
-  echo "Usage: ./scripts/package-release.sh v0.1.0" >&2
+  echo 'Usage: ./scripts/package-release.sh "v$(cat VERSION)"' >&2
   exit 1
 fi
 EXPECTED_VERSION="v$(tr -d '\n\r' < "${REPO_ROOT}/VERSION")"
