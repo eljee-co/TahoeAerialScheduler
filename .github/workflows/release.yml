@@ -61,7 +61,7 @@ jobs:
             echo "publish=false" >> "${GITHUB_OUTPUT}"
             echo "${TAG} is already published; keeping its files unchanged."
           else
-            if ! rg -qi 'not found' /tmp/tahoe-release-error; then
+            if ! grep -qi 'not found' /tmp/tahoe-release-error; then
               cat /tmp/tahoe-release-error >&2
               exit 1
             fi
