@@ -95,7 +95,7 @@ jobs:
           from pathlib import Path
           version = os.environ["RELEASE_TAG"][1:]
           changelog = Path("CHANGELOG.md").read_text()
-          match = re.search(r"^## \[" + re.escape(version) + r"\].*\n(.*?)(?=^## |\Z)", changelog, re.M | re.S)
+          match = re.search(r"^## \[" + re.escape(version) + r"\][^\n]*\n(.*?)(?=^## |\Z)", changelog, re.M | re.S)
           assert match and match.group(1).strip(), "Add release notes to CHANGELOG.md before publishing."
           notes = match.group(1).strip()
           notes += "\n\nThe installer is per-user and unsigned. If macOS blocks it, use right-click > Open. Native Aerial changes may briefly flash a fallback background. SHA-256 checksums and the source commit are attached.\n"
