@@ -13,6 +13,8 @@ fi
 mkdir -p "$(dirname "${OUTPUT_PATH}")"
 rm -rf "${OUTPUT_PATH}"
 osacompile -l JavaScript -o "${OUTPUT_PATH}" "${REPO_ROOT}/src/TahoeAerialMenu.js"
+"${TAHOE_BUILD_PYTHON:-python3}" "${REPO_ROOT}/scripts/stamp-app.py" "${OUTPUT_PATH}" menu
+codesign --force --sign - "${OUTPUT_PATH}"
 
 cat <<EOF
 Built menu app:

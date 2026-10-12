@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 
 import json
+import fcntl
 import os
 import plistlib
 import subprocess
 import sys
+import tempfile
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 APP_DIR = Path(
@@ -17,6 +21,13 @@ APP_DIR = Path(
 )
 CONFIG_PATH = APP_DIR / "config.json"
 STATE_PATH = APP_DIR / "state.json"
+LOG_PATH = APP_DIR / "scheduler.log"
+MENU_LOG_PATH = APP_DIR / "menu-ui.log"
+LOG_MAX_BYTES = 512 * 1024
+LOG_BACKUPS = 3
+RECOVERY_COOLDOWN_SECONDS = 300
+VERIFY_TIMEOUT_SECONDS = 8
+COMMAND_TIMEOUT_SECONDS = 3
 AERIAL_VIDEOS_DIR = (
     Path.home()
     / "Library"
@@ -47,6 +58,14 @@ WALLPAPER_AGENT_LABEL = f"gui/{os.getuid()}/com.apple.wallpaper.agent"
 AERIAL_EXTENSION_PROCESS = "WallpaperAerialsExtension"
 AERIAL_PROVIDER = "com.apple.wallpaper.choice.aerials"
 LEGACY_CONVERTIBLE_PROVIDERS = {"default", "com.apple.wallpaper.choice.image"}
+
+
+def app_version() -> str:
+    source_dir = Path(__file__).resolve().parent
+    for path in (source_dir / "VERSION", source_dir.parent / "VERSION"):
+        if path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+    return "unknown"
 
 DEFAULT_ASSETS = {
     "tahoe_night": {
@@ -93,9 +112,63 @@ def ensure_app_dir() -> None:
     APP_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def atomic_write(path: Path, payload: bytes) -> None:
+    # A failed/partial write must leave the previous settings intact. Use the
+    # same directory so replacement is atomic on the destination filesystem.
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    fd, temporary_path = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            os.fchmod(handle.fileno(), mode)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+
+
+@contextmanager
+def scheduler_lock():
+    ensure_app_dir()
+    with (APP_DIR / "scheduler.lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def rotate_log(path: Path) -> None:
+    if not path.exists() or path.stat().st_size < LOG_MAX_BYTES:
+        return
+    for index in range(LOG_BACKUPS, 0, -1):
+        destination = path.with_name(f"{path.name}.{index}")
+        source = path if index == 1 else path.with_name(f"{path.name}.{index - 1}")
+        if source.exists():
+            os.replace(source, destination)
+            if destination.stat().st_size > LOG_MAX_BYTES:
+                with destination.open("rb") as handle:
+                    handle.seek(-LOG_MAX_BYTES, os.SEEK_END)
+                    tail = handle.read()
+                boundary = tail.find(b"\n")
+                atomic_write(destination, tail[boundary + 1:] if boundary >= 0 else tail)
+
+
+def log_event(message: str, path: Path | None = None) -> None:
+    ensure_app_dir()
+    path = path or LOG_PATH
+    rotate_log(path)
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    message = str(message).replace("\n", " ").replace("\r", " ")[:2000]
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"[{timestamp}] [{app_version()}] {message}\n")
+
+
 def write_json(path: Path, payload: dict) -> None:
     ensure_app_dir()
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic_write(path, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
 
 
 def ensure_default_config() -> None:
@@ -135,6 +208,18 @@ def validate_config(config: dict) -> None:
         raise ValueError("Config must contain 'assets' and 'schedule'.")
 
     assets = config["assets"]
+    if not isinstance(assets, dict) or not isinstance(config["schedule"], list):
+        raise ValueError("Assets must be an object and schedule must be a list.")
+    if not config["schedule"]:
+        raise ValueError("The schedule must contain at least one time block.")
+    for key, asset in assets.items():
+        if not isinstance(asset, dict) or not all(
+            isinstance(asset.get(field), str) and asset[field]
+            for field in ("label", "asset_id")
+        ):
+            raise ValueError(f"Asset {key} must have a label and asset_id.")
+        if Path(asset["asset_id"]).name != asset["asset_id"]:
+            raise ValueError(f"Invalid asset ID for {key}.")
     seen_times = set()
     for item in config["schedule"]:
         start = item["start"]
@@ -211,10 +296,18 @@ def asset_video_path(asset_id: str) -> Path:
     return AERIAL_VIDEOS_DIR / f"{asset_id}.mov"
 
 
+def asset_is_downloaded(asset_id: str) -> bool:
+    try:
+        path = asset_video_path(asset_id)
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def missing_asset_entry(config: dict, asset_key: str) -> dict | None:
     asset = asset_from_key(config, asset_key)
     video_path = asset_video_path(asset["asset_id"])
-    if video_path.exists():
+    if asset_is_downloaded(asset["asset_id"]):
         return None
     return {
         "asset_key": asset_key,
@@ -252,7 +345,7 @@ def missing_assets_message(items: list[dict]) -> str:
 
 def ensure_asset_is_downloaded(asset: dict) -> None:
     video_path = asset_video_path(asset["asset_id"])
-    if video_path.exists():
+    if asset_is_downloaded(asset["asset_id"]):
         return
     raise RuntimeError(
         f"{asset['label']} is not downloaded yet. Open System Settings > Wallpaper "
@@ -271,29 +364,83 @@ def decode_asset_id(choice: dict) -> str | None:
     configuration = choice.get("Configuration")
     if not configuration:
         return None
-    payload = plistlib.loads(configuration)
+    try:
+        payload = plistlib.loads(configuration)
+    except (ValueError, TypeError, plistlib.InvalidFileException):
+        return None
+    if not isinstance(payload, dict):
+        return None
     return payload.get("assetID")
+
+
+def desktop_asset_id(store: dict) -> str | None:
+    section = store.get("AllSpacesAndDisplays", {})
+    for key in ("Desktop", "Linked"):
+        choices = section.get(key, {}).get("Content", {}).get("Choices", [])
+        if choices:
+            return decode_asset_id(choices[0])
+    return None
 
 
 def current_asset_id() -> str | None:
     try:
-        store = load_plist(LIVE_PLIST)
-        choice = store["AllSpacesAndDisplays"]["Desktop"]["Content"]["Choices"][0]
-        return decode_asset_id(choice)
+        return desktop_asset_id(load_plist(LIVE_PLIST))
     except Exception:
         return None
+
+
+def desktop_choice_ids(store: dict) -> list[str | None]:
+    ids = []
+
+    def visit(section):
+        if not isinstance(section, dict):
+            return
+        for key, value in section.items():
+            if key in ("Desktop", "Linked") and isinstance(value, dict):
+                choices = value.get("Content", {}).get("Choices", [])
+                if choices:
+                    ids.extend(decode_asset_id(choice) for choice in choices)
+            elif isinstance(value, dict):
+                visit(value)
+
+    for key in ("AllSpacesAndDisplays", "Displays", "Spaces"):
+        visit(store.get(key))
+    return ids
+
+
+def desktop_choices_match(store: dict, asset_id: str) -> bool:
+    ids = desktop_choice_ids(store)
+    return bool(ids) and all(value == asset_id for value in ids)
+
+
+def desktop_store_matches(asset_id: str) -> bool:
+    try:
+        if not desktop_choices_match(load_plist(LIVE_PLIST), asset_id):
+            return False
+        # Current macOS can update the legacy Desktop before Index_v2. Check
+        # both desktop stores; an independently chosen Idle saver is not a
+        # desktop mismatch and must not cause repeated visible reloads.
+        if LEGACY_PLIST.exists():
+            legacy_ids = desktop_choice_ids(load_plist(LEGACY_PLIST))
+            if any(value != asset_id for value in legacy_ids):
+                return False
+        return True
+    except (OSError, ValueError, TypeError, plistlib.InvalidFileException):
+        return False
 
 
 def legacy_asset_id() -> str | None:
     try:
         store = load_plist(LEGACY_PLIST)
         section = store["AllSpacesAndDisplays"]
-        for child_key in ("Linked", "Idle", "Desktop"):
+        for child_key in ("Desktop", "Linked", "Idle"):
             child = section.get(child_key)
             if not isinstance(child, dict):
                 continue
             choice = child["Content"]["Choices"][0]
             asset_id = decode_asset_id(choice)
+            if child_key == "Desktop":
+                return asset_id
             if asset_id:
                 return asset_id
     except Exception:
@@ -347,13 +494,24 @@ def update_content_container(
         changed = update_choice(choice, asset_id, allow_provider_conversion) or changed
         has_managed_choice = choice.get("Provider") == AERIAL_PROVIDER or has_managed_choice
 
+    if has_managed_choice and all(choice.get("Provider") == AERIAL_PROVIDER for choice in choices):
+        if len(choices) > 1:
+            content["Choices"] = choices[:1]
+            changed = True
+        if content.get("Shuffle") not in (None, "$null"):
+            content["Shuffle"] = "$null"
+            changed = True
+
     if has_managed_choice and "EncodedOptionValues" in content:
         content.pop("EncodedOptionValues", None)
         changed = True
 
     if changed:
-        container["LastSet"] = applied_at
-        container["LastUse"] = applied_at
+        # Binary property-list dates are UTC, even when plistlib returns them
+        # without a timezone. Never store local wall-clock time as UTC.
+        timestamp = applied_at.astimezone(timezone.utc).replace(tzinfo=None)
+        container["LastSet"] = timestamp
+        container["LastUse"] = timestamp
     return changed
 
 
@@ -408,15 +566,24 @@ def write_updated_plist(
     if not changed:
         return False
 
-    with path.open("wb") as handle:
-        plistlib.dump(store, handle, fmt=plistlib.FMT_BINARY, sort_keys=False)
+    atomic_write(path, plistlib.dumps(store, fmt=plistlib.FMT_BINARY, sort_keys=False))
     return True
 
 
-def write_store(asset_id: str, applied_at: datetime | None = None) -> None:
+def write_store(asset_id: str, applied_at: datetime | None = None) -> bool:
     applied_at = applied_at or datetime.now()
     updated_any = False
-    updated_any = write_updated_plist(LIVE_PLIST, asset_id, applied_at) or updated_any
+    # Validate the live shape before writing either file. A legacy-only update
+    # must never count as a successful desktop repair.
+    if not LIVE_PLIST.exists():
+        raise RuntimeError("The native desktop wallpaper store is missing. Open Wallpaper settings and select a Tahoe Aerial once.")
+    live_store = load_plist(LIVE_PLIST)
+    update_store_sections(live_store, asset_id, applied_at, allow_provider_conversion=True)
+    if not desktop_choices_match(live_store, asset_id):
+        raise RuntimeError("The active wallpaper format is not supported. Open Wallpaper settings and select a Tahoe Aerial once.")
+    updated_any = write_updated_plist(
+        LIVE_PLIST, asset_id, applied_at, allow_provider_conversion=True
+    ) or updated_any
     updated_any = (
         write_updated_plist(
             LEGACY_PLIST,
@@ -426,8 +593,8 @@ def write_store(asset_id: str, applied_at: datetime | None = None) -> None:
         )
         or updated_any
     )
-    if not updated_any:
-        raise RuntimeError("Could not find any native Aerial wallpaper entries to update.")
+    # Already-correct settings are valid: a stuck player still needs a restart.
+    return updated_any
 
 
 def slot_started_at(current: datetime, slot: Slot) -> datetime:
@@ -447,9 +614,9 @@ def active_desktop_last_set_at() -> datetime | None:
         store = load_plist(LIVE_PLIST)
         last_set = store["AllSpacesAndDisplays"]["Desktop"].get("LastSet")
         if isinstance(last_set, datetime):
-            if last_set.tzinfo is not None:
-                return last_set.astimezone().replace(tzinfo=None)
-            return last_set
+            if last_set.tzinfo is None:
+                last_set = last_set.replace(tzinfo=timezone.utc)
+            return last_set.astimezone().replace(tzinfo=None)
     except Exception:
         return None
     return None
@@ -465,7 +632,10 @@ def parse_state_timestamp(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed
     except ValueError:
         return None
 
@@ -493,67 +663,147 @@ def asset_id_from_video_path(path: str) -> str | None:
     return None
 
 
-def active_aerial_video_id() -> str | None:
-    pgrep_result = subprocess.run(
-        ["pgrep", AERIAL_EXTENSION_PROCESS],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if pgrep_result.returncode != 0:
-        return None
+@dataclass(frozen=True)
+class Playback:
+    asset_ids: tuple[str, ...] = ()
+    available: bool = True
+    reason: str = ""
 
-    for pid in pgrep_result.stdout.split():
-        lsof_result = subprocess.run(
-            ["lsof", "-Fn", "-p", pid],
-            capture_output=True,
-            text=True,
-            check=False,
+
+def observe_playback() -> Playback:
+    try:
+        pgrep_result = subprocess.run(
+            ["/usr/bin/pgrep", "-x", "-U", str(os.getuid()), AERIAL_EXTENSION_PROCESS],
+            capture_output=True, text=True, check=False, timeout=COMMAND_TIMEOUT_SECONDS,
         )
-        if lsof_result.returncode != 0:
-            continue
+        if pgrep_result.returncode == 1:
+            return Playback(reason="The wallpaper player is not running.")
+        if pgrep_result.returncode != 0:
+            return Playback(available=False, reason="The wallpaper player could not be inspected.")
+        ids = []
+        for pid in pgrep_result.stdout.split():
+            result = subprocess.run(
+                ["/usr/sbin/lsof", "-Fn", "-p", pid],
+                capture_output=True, text=True, check=False, timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+            if result.returncode != 0:
+                return Playback(available=False, reason="The playing wallpaper files could not be inspected.")
+            for line in result.stdout.splitlines():
+                asset_id = asset_id_from_video_path(line[1:]) if line.startswith("n") else None
+                if asset_id and asset_id not in ids:
+                    ids.append(asset_id)
+        return Playback(tuple(ids), reason="" if ids else "The wallpaper player has no visible video file.")
+    except (OSError, subprocess.TimeoutExpired):
+        return Playback(available=False, reason="Wallpaper playback inspection failed or timed out.")
 
-        for line in lsof_result.stdout.splitlines():
-            if not line.startswith("n"):
-                continue
-            asset_id = asset_id_from_video_path(line[1:])
-            if asset_id:
-                return asset_id
-    return None
+
+def active_aerial_video_id() -> str | None:
+    playback = observe_playback()
+    return playback.asset_ids[0] if len(playback.asset_ids) == 1 else None
+
+
+def playing_label(config: dict, playback: Playback) -> str | None:
+    if not playback.asset_ids:
+        return None
+    if len(playback.asset_ids) > 1:
+        return "Multiple Aerial clips"
+    asset_id = playback.asset_ids[0]
+    for asset in config["assets"].values():
+        if asset["asset_id"] == asset_id:
+            return asset["label"]
+    try:
+        manifest = json.loads((AERIAL_VIDEOS_DIR.parent / "manifest" / "entries.json").read_text())
+        for asset in manifest.get("assets", []):
+            if asset.get("id") == asset_id:
+                golden_gate = {
+                    "GG_A_DAY": "Golden Gate Day", "GG_A_EVENING": "Golden Gate Evening",
+                    "GG_A_NIGHT": "Golden Gate Night", "GG_A_SUNSET": "Golden Gate Sunset",
+                }
+                label = golden_gate.get(asset.get("shotID")) or asset.get("accessibilityLabel")
+                return label if label and "_" not in label else "Another Aerial clip"
+    except (OSError, ValueError):
+        pass
+    return "Another Aerial clip"
+
+
+def playback_status(desired_asset_id: str, playback: Playback, store_matches: bool) -> str:
+    if not store_matches:
+        return "mismatch"
+    if not playback.available or not playback.asset_ids:
+        return "unverified"
+    return "verified" if playback.asset_ids == (desired_asset_id,) else "mismatch"
 
 
 def restart_wallpaper_agent() -> None:
+    # Stop the old extension first, so the new agent cannot connect to a player
+    # that we kill immediately afterward (which causes connection failures).
+    subprocess.run(
+        ["/usr/bin/killall", AERIAL_EXTENSION_PROCESS],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        check=False, timeout=COMMAND_TIMEOUT_SECONDS,
+    )
     result = subprocess.run(
-        ["launchctl", "kickstart", "-k", WALLPAPER_AGENT_LABEL],
+        ["/bin/launchctl", "kickstart", "-k", WALLPAPER_AGENT_LABEL],
         capture_output=True,
         text=True,
-    )
-    subprocess.run(
-        ["killall", AERIAL_EXTENSION_PROCESS],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
+        timeout=COMMAND_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
-        subprocess.run(
-            ["killall", "WallpaperAgent"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
+        fallback = subprocess.run(
+            ["/usr/bin/killall", "WallpaperAgent"],
+            capture_output=True, text=True, check=False, timeout=COMMAND_TIMEOUT_SECONDS,
         )
+        if fallback.returncode != 0:
+            raise RuntimeError("macOS did not allow the wallpaper renderer to restart.")
+
+
+def verify_playback(asset_id: str) -> tuple[Playback, bool]:
+    deadline = time.monotonic() + VERIFY_TIMEOUT_SECONDS
+    while True:
+        playback = observe_playback()
+        store_matches = desktop_store_matches(asset_id)
+        if playback_status(asset_id, playback, store_matches) == "verified":
+            return playback, store_matches
+        if not playback.available or time.monotonic() >= deadline:
+            return playback, store_matches
+        time.sleep(0.5)
 
 
 def read_state() -> dict:
     if not STATE_PATH.exists():
         return {}
-    return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    try:
+        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        return state if isinstance(state, dict) else {}
+    except json.JSONDecodeError:
+        return {}
 
 
 def write_state(payload: dict) -> None:
     write_json(STATE_PATH, payload)
 
 
-def apply_current_schedule() -> int:
+def save_health(state: dict, status: str, error: str | None = None) -> None:
+    previous = read_state()
+    updated = dict(state, health=status, last_error=error, version=app_version())
+    if updated != previous:
+        if status != previous.get("health") or error != previous.get("last_error"):
+            updated["last_status_change_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        write_state(updated)
+        if error and error != previous.get("last_error"):
+            log_event(error)
+
+
+def recovery_attempt_is_recent(state: dict, asset_id: str, current: datetime) -> bool:
+    if state.get("health") == "verified":
+        return False
+    if state.get("last_attempt_asset_id") != asset_id:
+        return False
+    attempted_at = parse_state_timestamp(state.get("last_attempt_at"))
+    return attempted_at is not None and 0 <= (current - attempted_at).total_seconds() < RECOVERY_COOLDOWN_SECONDS
+
+
+def apply_current_schedule(force: bool = False, quiet: bool = False) -> int:
     config = load_config()
     current = datetime.now()
     slot = slot_for_now(config, current)
@@ -569,43 +819,62 @@ def apply_current_schedule() -> int:
         desired_asset_id,
         state,
     )
-    active_video_id = active_aerial_video_id()
-    active_video_is_stale = active_video_id is not None and active_video_id != desired_asset_id
-
-    # Only the live desktop choice should decide whether we need to restart the
-    # wallpaper pipeline. Linked/idle stores can drift independently, and
-    # forcing a full reapply for those mismatches causes unnecessary visible
-    # resets on the desktop. A stale LastSet still gets one refresh per slot so
-    # WallpaperAgent reloads after waking or cache drift, but state.json prevents
-    # a stale plist timestamp from causing a visible restart every minute. The
-    # Aerial extension can also keep playing its previous .mov after the plist
-    # changes, so verify the actual player process when it is visible.
+    playback = observe_playback()
+    store_matches = desktop_store_matches(desired_asset_id)
+    status = playback_status(desired_asset_id, playback, store_matches)
     if (
-        active_asset_id == desired_asset_id
+        status == "verified"
         and (not active_is_stale or stale_refresh_already_done)
-        and not active_video_is_stale
     ):
-        write_state(
-            {
-                "last_applied_asset": slot.asset_key,
-                "last_applied_asset_id": desired_asset_id,
-                "last_applied_at": datetime.now().isoformat(timespec="seconds"),
-            }
-        )
-        print(f"Already active: {asset['label']} ({slot.asset_key})")
+        # Keep application times honest and avoid rewriting state every minute.
+        if (state.get("last_verified_asset_id") != desired_asset_id
+                or state.get("health") != "verified" or state.get("version") != app_version()):
+            state.update(last_verified_asset_id=desired_asset_id,
+                         last_verified_at=current.astimezone().isoformat(timespec="seconds"))
+            save_health(state, "verified")
+            log_event(f"Verified {asset['label']} is playing.")
+        if not quiet:
+            print(f"Already playing: {asset['label']} ({slot.asset_key})")
         return 0
 
+    if not force and store_matches and not playback.available and (not active_is_stale or stale_refresh_already_done):
+        save_health(state, "unverified", playback.reason)
+        if not quiet:
+            print("Wallpaper settings match the schedule; playback could not be verified.")
+        return 0
+
+    if not force and recovery_attempt_is_recent(state, desired_asset_id, current):
+        save_health(state, status, state.get("last_error") or "Waiting before retrying wallpaper recovery.")
+        if not quiet:
+            print("Waiting before retrying wallpaper recovery.")
+        return 1 if status == "mismatch" else 0
+
+    state.update(last_attempt_asset_id=desired_asset_id,
+                 last_attempt_at=current.astimezone().isoformat(timespec="seconds"))
+    write_state(state)
+    observed = playing_label(config, playback) or playback.reason or "unknown playback"
+    log_event(f"Restoring {asset['label']} for the {slot.start} block; observed {observed}.")
     write_store(desired_asset_id, current)
     restart_wallpaper_agent()
-    write_state(
-        {
-            "last_applied_asset": slot.asset_key,
-            "last_applied_asset_id": desired_asset_id,
-            "last_applied_at": datetime.now().isoformat(timespec="seconds"),
-        }
-    )
+    playback, store_matches = verify_playback(desired_asset_id)
+    status = playback_status(desired_asset_id, playback, store_matches)
+    if status == "mismatch":
+        raise RuntimeError(f"Wallpaper recovery is not yet confirmed; observed {playing_label(config, playback) or 'different wallpaper settings'}.")
+    if status == "unverified":
+        save_health(state, status, playback.reason)
+        if not quiet:
+            print("Wallpaper settings restored; playback is not yet verified.")
+        return 0
+    state.update(last_applied_asset=slot.asset_key, last_applied_asset_id=desired_asset_id,
+                 last_applied_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+                 last_verified_asset_id=desired_asset_id,
+                 last_verified_at=datetime.now().astimezone().isoformat(timespec="seconds"))
+    save_health(state, "verified")
     action = "Refreshed" if active_asset_id == desired_asset_id else "Applied"
-    print(f"{action} {asset['label']} ({slot.asset_key}) for schedule starting {slot.start}.")
+    message = f"{action} and verified {asset['label']} ({slot.asset_key}) for schedule starting {slot.start}."
+    log_event(message)
+    if not quiet:
+        print(message)
     return 0
 
 
@@ -633,16 +902,22 @@ def print_assets() -> int:
     return 0
 
 
-def print_info_json() -> int:
+def build_info() -> dict:
     config = load_config()
-    slot = slot_for_now(config)
+    current = datetime.now()
+    slot = slot_for_now(config, current)
     following = next_slot(config, slot)
     state = read_state()
     missing = missing_assets(config)
-    current_missing = current_missing_assets(config)
+    current_missing = current_missing_assets(config, current)
+    playback = observe_playback()
+    desired_asset_id = asset_from_key(config, slot.asset_key)["asset_id"]
+    store_matches = desktop_store_matches(desired_asset_id)
+    status = "missing_download" if current_missing else playback_status(desired_asset_id, playback, store_matches)
 
     payload = {
-        "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "version": app_version(),
+        "current_time": current.astimezone().isoformat(timespec="seconds"),
         "current_slot": {
             "start": slot.start,
             "asset_key": slot.asset_key,
@@ -670,35 +945,49 @@ def print_info_json() -> int:
         "wallpaper_settings_url": WALLPAPER_SETTINGS_URL,
         "index_v2_asset_id": current_asset_id(),
         "index_asset_id": legacy_asset_id(),
-        "active_aerial_video_id": active_aerial_video_id(),
+        "active_aerial_video_id": playback.asset_ids[0] if len(playback.asset_ids) == 1 else None,
+        "playback": {
+            "status": status,
+            "label": playing_label(config, playback),
+            "asset_ids": list(playback.asset_ids),
+            "store_matches": store_matches,
+            "reason": playback.reason or None,
+        },
+        "last_attempt_at": state.get("last_attempt_at"),
+        "last_verified_at": state.get("last_verified_at"),
+        "last_error": state.get("last_error"),
         "last_applied_asset": state.get("last_applied_asset"),
         "last_applied_at": state.get("last_applied_at"),
     }
-    print(json.dumps(payload))
+    return payload
+
+
+def print_info_json() -> int:
+    print(json.dumps(build_info()))
     return 0
 
 
 def print_status() -> int:
-    config = load_config()
-    slot = slot_for_now(config)
-    asset = asset_from_key(config, slot.asset_key)
-    active_asset = current_asset_id()
-    legacy_asset = legacy_asset_id()
-    active_video = active_aerial_video_id()
-    state = read_state()
-    missing = missing_assets(config)
+    info = build_info()
 
     print(f"Config: {CONFIG_PATH}")
-    print(f"Current time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Scheduled asset now: {asset['label']} ({slot.asset_key})")
-    print(f"Scheduled start: {slot.start}")
-    print(f"Index_v2 asset ID: {active_asset or 'unknown'}")
-    print(f"Index asset ID: {legacy_asset or 'unknown'}")
-    print(f"Active aerial video ID: {active_video or 'unknown'}")
-    print(f"Last applied asset: {state.get('last_applied_asset', 'none')}")
-    print(f"Last applied at: {state.get('last_applied_at', 'never')}")
-    if missing:
-        print(missing_assets_message(missing))
+    print(f"Version: {info['version']}")
+    print(f"Current time: {info['current_time']}")
+    print(f"Scheduled asset now: {info['current_slot']['label']} ({info['current_slot']['asset_key']})")
+    print(f"Scheduled start: {info['current_slot']['start']}")
+    print(f"Playing: {info['playback']['label'] or 'not yet verified'}")
+    print(f"Playback status: {info['playback']['status']}")
+    print(f"Index_v2 asset ID: {info['index_v2_asset_id'] or 'unknown'}")
+    print(f"Index asset ID: {info['index_asset_id'] or 'unknown'}")
+    print(f"Active aerial video ID: {info['active_aerial_video_id'] or 'unknown'}")
+    print(f"Last applied asset: {info['last_applied_asset'] or 'none'}")
+    print(f"Last applied at: {info['last_applied_at'] or 'never'}")
+    if info['playback']['reason']:
+        print(info['playback']['reason'])
+    if info['last_error']:
+        print(f"Last recovery error: {info['last_error']}")
+    if info['missing_assets']:
+        print(missing_assets_message(info['missing_assets']))
     return 0
 
 
@@ -762,6 +1051,7 @@ def set_slot(start: str, asset_key: str) -> int:
         {"start": slot.start, "asset": slot.asset_key, "period": slot.period}
         for slot in sorted_slots(config)
     ]
+    validate_config(config)
     write_json(CONFIG_PATH, config)
     print(f"Updated {start} to use {asset_key}.")
     return 0
@@ -791,12 +1081,12 @@ def set_start_time(old_start: str, new_start: str) -> int:
     return 0
 
 
-def main(argv: list[str]) -> int:
+def run_cli(argv: list[str]) -> int:
     ensure_default_config()
 
     if len(argv) < 2:
         print(
-            "Usage: scheduler.py [apply|status|show-schedule|list-assets|info-json|"
+            "Usage: scheduler.py [apply [--quiet]|repair|status|show-schedule|list-assets|info-json|"
             "missing-assets|missing-assets-json|current-missing-assets|"
             "current-missing-assets-json|open-wallpaper-settings|"
             "set-slot HH:MM asset_key|set-start-time OLD_HH:MM NEW_HH:MM]"
@@ -804,41 +1094,64 @@ def main(argv: list[str]) -> int:
         return 1
 
     command = argv[1]
+    if command == "apply":
+        if argv[2:] not in ([], ["--quiet"]):
+            raise ValueError("Usage: scheduler.py apply [--quiet]")
+        return apply_current_schedule(quiet="--quiet" in argv)
+    if command == "repair":
+        return apply_current_schedule(force=True)
+    if command == "log-menu" and len(argv) == 3:
+        log_event(argv[2], MENU_LOG_PATH)
+        return 0
+    if command == "status":
+        return print_status()
+    if command == "show-schedule":
+        return print_schedule()
+    if command == "list-assets":
+        return print_assets()
+    if command == "info-json":
+        return print_info_json()
+    if command == "missing-assets":
+        return print_missing_assets()
+    if command == "missing-assets-json":
+        return print_missing_assets_json()
+    if command == "current-missing-assets":
+        return print_current_missing_assets()
+    if command == "current-missing-assets-json":
+        return print_current_missing_assets_json()
+    if command == "open-wallpaper-settings":
+        return open_wallpaper_settings()
+    if command == "set-slot":
+        if len(argv) != 4:
+            print("Usage: scheduler.py set-slot HH:MM asset_key")
+            return 1
+        return set_slot(argv[2], argv[3])
+    if command == "set-start-time":
+        if len(argv) != 4:
+            print("Usage: scheduler.py set-start-time OLD_HH:MM NEW_HH:MM")
+            return 1
+        return set_start_time(argv[2], argv[3])
+    print("Unknown command.")
+    return 1
+
+
+def main(argv: list[str]) -> int:
+    command = argv[1] if len(argv) > 1 else ""
     try:
-        if command == "apply":
-            return apply_current_schedule()
-        if command == "status":
-            return print_status()
-        if command == "show-schedule":
-            return print_schedule()
-        if command == "list-assets":
-            return print_assets()
-        if command == "info-json":
-            return print_info_json()
-        if command == "missing-assets":
-            return print_missing_assets()
-        if command == "missing-assets-json":
-            return print_missing_assets_json()
-        if command == "current-missing-assets":
-            return print_current_missing_assets()
-        if command == "current-missing-assets-json":
-            return print_current_missing_assets_json()
-        if command == "open-wallpaper-settings":
-            return open_wallpaper_settings()
-        if command == "set-slot":
-            if len(argv) != 4:
-                print("Usage: scheduler.py set-slot HH:MM asset_key")
-                return 1
-            return set_slot(argv[2], argv[3])
-        if command == "set-start-time":
-            if len(argv) != 4:
-                print("Usage: scheduler.py set-start-time OLD_HH:MM NEW_HH:MM")
-                return 1
-            return set_start_time(argv[2], argv[3])
-        print("Unknown command.")
-        return 1
+        if command in ("apply", "repair", "set-slot", "set-start-time", "log-menu"):
+            with scheduler_lock():
+                for name in ("scheduler-launch.log", "menu-launch.log", "menu-ui.log", "scheduler.log"):
+                    rotate_log(APP_DIR / name)
+                return run_cli(argv)
+        return run_cli(argv)
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        try:
+            with scheduler_lock():
+                save_health(read_state(), "error", str(exc))
+        except OSError:
+            pass
+        if "--quiet" not in argv:
+            print(f"Error: {exc}", file=sys.stderr)
         return 1
 
 

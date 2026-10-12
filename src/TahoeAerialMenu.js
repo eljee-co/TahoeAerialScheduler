@@ -9,7 +9,6 @@ const homeDir = ObjC.unwrap($.NSHomeDirectory());
 const schedulerDir = `${homeDir}/Library/Application Support/TahoeAerialScheduler`;
 const schedulerRunnerPath = `${schedulerDir}/run-scheduler.sh`;
 const configPath = `${schedulerDir}/config.json`;
-const menuLogPath = `${schedulerDir}/menu-ui.log`;
 const wallpaperSettingsURL = "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension";
 
 const assetOrder = ["tahoe_morning", "tahoe_day", "tahoe_evening", "tahoe_night"];
@@ -18,12 +17,14 @@ let delegate = null;
 let statusItem = null;
 let refreshTimer = null;
 let missingAssetsPromptSignature = null;
+let lastMenuSignature = null;
 
 function logMessage(message) {
-  const timestamp = (new Date()).toISOString();
-  app.doShellScript(
-    `/bin/echo ${shellQuote(`[${timestamp}] ${message}`)} >> ${shellQuote(menuLogPath)}`
-  );
+  try {
+    runScheduler(["log-menu", message]);
+  } catch (_) {
+    // A logging failure must not hide the background controls.
+  }
 }
 
 function shellQuote(value) {
@@ -92,6 +93,8 @@ function nsString(value) {
 
 function menuSymbolName(period) {
   switch (period) {
+    case "warning":
+      return "exclamationmark.triangle";
     case "night":
       return "moon.stars.fill";
     case "morning":
@@ -147,6 +150,22 @@ function missingAssetsSummary(info) {
   return currentMissingAssets(info).map((item) => item.label).join(", ");
 }
 
+function playbackTitle(info) {
+  const playback = info.playback || {};
+  if (playback.label) {
+    return `Playing: ${playback.label.replace(/^Tahoe\s+/, "")}`;
+  }
+  return "Playback not yet verified";
+}
+
+function playbackWarning(info) {
+  const status = (info.playback || {}).status;
+  if (status === "verified") return null;
+  if (status === "missing_download") return "Scheduled clip needs downloading";
+  if (status === "mismatch") return "Background needs recovery";
+  return "Playback not yet verified";
+}
+
 function maybePromptForMissingCurrentAssets(info) {
   const missingAssets = currentMissingAssets(info);
   if (missingAssets.length === 0) {
@@ -183,17 +202,17 @@ function maybePromptForMissingCurrentAssets(info) {
 function refreshMenu() {
   try {
     const info = loadInfo();
-    const currentLabel = info.current_slot.label;
     const nextSlotStart = info.next_slot.start;
+    const warning = playbackWarning(info);
 
     if (!statusItem) {
       statusItem = $.NSStatusBar.systemStatusBar.statusItemWithLength($.NSVariableStatusItemLength);
     }
 
-    statusItem.button.setImage(menuImageFor(info.current_slot.period));
+    statusItem.button.setImage(menuImageFor(warning ? "warning" : info.current_slot.period));
     statusItem.button.setTitle(nsString(""));
     statusItem.button.setToolTip(
-      nsString(`${currentLabel} now, next change at ${nextSlotStart}`)
+      nsString(`${playbackTitle(info)}; scheduled: ${info.current_slot.label}; next change at ${nextSlotStart}`)
     );
 
     const menu = $.NSMenu.alloc.initWithTitle(nsString("Tahoe Aerial"));
@@ -206,8 +225,14 @@ function refreshMenu() {
     }
 
     menu.addItem(
-      standardMenuItem(`Now: ${shortAssetLabel(info, info.current_slot.asset_key)}`, null, null, false)
+      standardMenuItem(playbackTitle(info), null, null, false)
     );
+    menu.addItem(standardMenuItem(`Scheduled: ${shortAssetLabel(info, info.current_slot.asset_key)}`, null, null, false));
+    menu.addItem(standardMenuItem(`Next: ${nextSlotStart} — ${shortAssetLabel(info, info.next_slot.asset_key)}`, null, null, false));
+    if (warning && warning !== playbackTitle(info)) {
+      menu.addItem(standardMenuItem(warning, null, null, false));
+    }
+    menu.addItem(standardMenuItem("Restore Scheduled Background", "repairBackground:", delegate, true));
     menu.addItem(separator());
 
     info.schedule.forEach((entry) => {
@@ -242,12 +267,18 @@ function refreshMenu() {
 
     menu.addItem(separator());
     menu.addItem(standardMenuItem("Open Config", "openConfig:", delegate, true));
+    menu.addItem(standardMenuItem("Open Diagnostics Log", "openLog:", delegate, true));
+    menu.addItem(standardMenuItem(`Version ${info.version}`, null, null, false));
     menu.addItem(separator());
     menu.addItem(standardMenuItem("Quit Tahoe Menu", "quitApp:", delegate, true));
 
     statusItem.setMenu(menu);
     maybePromptForMissingCurrentAssets(info);
-    logMessage(`refreshed menu for ${info.current_slot.asset_key}`);
+    const signature = JSON.stringify([info.schedule, info.playback, info.current_missing_assets]);
+    if (signature !== lastMenuSignature) {
+      logMessage(`${playbackTitle(info)}; scheduled ${info.current_slot.label}; status ${(info.playback || {}).status}`);
+      lastMenuSignature = signature;
+    }
   } catch (error) {
     if (!statusItem) {
       statusItem = $.NSStatusBar.systemStatusBar.statusItemWithLength($.NSVariableStatusItemLength);
@@ -266,7 +297,10 @@ function refreshMenu() {
     menu.addItem(standardMenuItem("Open Config", "openConfig:", delegate, true));
     menu.addItem(standardMenuItem("Quit Tahoe Menu", "quitApp:", delegate, true));
     statusItem.setMenu(menu);
-    logMessage(`menu error: ${message}`);
+    if (lastMenuSignature !== message) {
+      logMessage(`menu error: ${message}`);
+      lastMenuSignature = message;
+    }
   }
 }
 
@@ -327,6 +361,30 @@ ObjC.registerSubclass({
       },
     },
 
+    "openLog:": {
+      types: ["void", ["id"]],
+      implementation: function () {
+        openTextEdit(`${schedulerDir}/scheduler.log`);
+      },
+    },
+
+    "repairBackground:": {
+      types: ["void", ["id"]],
+      implementation: function () {
+        try {
+          runScheduler(["repair"]);
+          refreshMenu();
+          const info = loadInfo();
+          showNotification(info.playback.status === "verified"
+            ? `Verified ${info.playback.label} is playing`
+            : "Background restored; playback is not yet verified");
+        } catch (error) {
+          refreshMenu();
+          showNotification(`Recovery failed: ${error}`);
+        }
+      },
+    },
+
     "openWallpaperSettings:": {
       types: ["void", ["id"]],
       implementation: function () {
@@ -351,7 +409,7 @@ function run() {
   $.NSApp.setDelegate(delegate);
   refreshMenu();
   refreshTimer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(
-    60.0,
+    15.0,
     delegate,
     "refreshTimerFired:",
     null,

@@ -22,6 +22,9 @@ The maintainer docs in `docs/RELEASING.md` are intentionally kept in the repo so
 - Uses native Apple Tahoe Aerials, not still-image dynamic wallpapers
 - Schedules different Tahoe clips at different times of day
 - Checks the schedule on wall-clock minute boundaries so configured start times take effect at the named minute
+- Repairs default/image fallbacks and stuck Aerial playback, then checks the actual player before claiming success
+- Shows the playing clip separately from the scheduled clip, with a restore action and diagnostics log
+- Uses atomic settings writes and bounded, timestamped logs; healthy checks do not restart the renderer
 - Keeps a simple menu bar companion for editing clip assignments and start times
 - Preserves your existing `config.json` on reinstall
 - Installs per-user without touching system-wide locations beyond your own login session
@@ -29,7 +32,7 @@ The maintainer docs in `docs/RELEASING.md` are intentionally kept in the repo so
 ## Requirements
 
 - macOS with the Tahoe Aerials available
-- Python 3
+- Python 3.10 or newer
 - `osacompile` available on the Mac
 
 If the Tahoe Aerial needed for the current schedule block is not downloaded yet, the installer and menu app will prompt the user to open Wallpaper settings. Missing future clips are still reported by the status commands, but they do not trigger a prompt until the scheduler tries to use them.
@@ -38,7 +41,7 @@ If the Tahoe Aerial needed for the current schedule block is not downloaded yet,
 
 The scheduler changes Apple's native Aerial store, then reloads the wallpaper renderer so macOS picks up the new Tahoe clip.
 
-That reload may briefly show the default grey background during clip changes.
+That reload may briefly show a fallback background during clip changes. macOS renderer failures can also interrupt playback; the scheduler attempts recovery at the next minute check. Failed or unverified attempts wait five minutes before another automatic reload, and the menu's `Restore Scheduled Background` action can retry sooner.
 
 We tried using macOS's normal still-image wallpaper setter as a transition mask, but that can break the native Aerial lock-screen video path. The current approach keeps true native Aerial behavior and treats the brief transition flash as a known limitation until a safe live-update path is found.
 
@@ -104,6 +107,14 @@ Then reinstall over the current prototype:
 ./scripts/install.sh
 ```
 
+Run all regression tests, compile both apps, build and verify the DMG, and save the tested commit and duration:
+
+```bash
+./scripts/verify.sh
+```
+
+Node.js 22 or newer is needed for the menu behavior tests, alongside the runtime requirements. It is not required for the installed app.
+
 If you just want to compile the menu app artifact:
 
 ```bash
@@ -158,6 +169,14 @@ Apply the current block immediately:
 "$HOME/Library/Application Support/TahoeAerialScheduler/run-scheduler.sh" apply
 ```
 
+Retry recovery immediately, including when an automatic retry is waiting:
+
+```bash
+"$HOME/Library/Application Support/TahoeAerialScheduler/run-scheduler.sh" repair
+```
+
+The menu's `Playing` line reflects the observed video. If macOS playback cannot be inspected, the menu shows `Playback not yet verified`. `Scheduled` always shows the intended clip. Scheduler and menu logs rotate at 512 KiB with three recent archives, and application timestamps advance only after a confirmed change.
+
 Change the clip assigned to a slot:
 
 ```bash
@@ -176,29 +195,22 @@ The cleanest v1 release path is:
 
 1. Keep this repo as the source of truth.
 2. Test `./scripts/install.sh` on at least one clean user account or second Mac.
-3. Push a version tag like `v0.1.0` to trigger the automated GitHub Release workflow.
+3. Bump `VERSION`, add release notes, and merge the tested change to main to trigger the automated GitHub Release workflow.
 4. Optionally add screenshots or a short demo GIF.
 
 If you want to build the DMG locally before tagging, you can still run:
 
 ```bash
-./scripts/package-release.sh v0.1.0
+./scripts/package-release.sh "v$(cat VERSION)"
 ```
 
 For the full checklist, see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Automated Releases
 
-Pushing a tag that starts with `v` now triggers the release workflow in `.github/workflows/release.yml`.
+For each release, bump `VERSION` and add matching notes to `CHANGELOG.md` in the change reviewed for main. Once that version bump reaches main, the release workflow runs the full verification before publishing the DMG, SHA-256 (Secure Hash Algorithm, 256-bit) checksum, build receipt, and verification report. Tags and manual workflow dispatch remain available; release tags must match `VERSION`.
 
-Example:
-
-```bash
-git tag v0.1.1
-git push origin v0.1.1
-```
-
-That workflow builds `TahoeAerialScheduler-v0.1.1.dmg`, creates a GitHub Release if needed, and attaches the DMG automatically.
+Already published releases are kept unchanged. A failed publication that leaves a draft requires inspecting that draft before retrying, so partially uploaded or different files cannot silently replace a release.
 
 ## Contributing
 

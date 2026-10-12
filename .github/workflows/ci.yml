@@ -6,37 +6,36 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: macos-latest
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
-      - name: Validate shell scripts
-        run: |
-          bash -n scripts/install.sh
-          bash -n scripts/uninstall.sh
-          bash -n scripts/build-menu-app.sh
-          bash -n scripts/package-release.sh
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
 
-      - name: Validate scheduler syntax
-        run: python -m py_compile src/scheduler.py
+      - name: Verify source and packaged apps
+        run: ./scripts/verify.sh ci
 
-      - name: Run scheduler tests
-        run: python -m unittest discover -s tests
-
-      - name: Build menu app
-        run: ./scripts/build-menu-app.sh
-
-      - name: Build installer app
-        run: ./scripts/build-installer-app.sh
-
-      - name: Build release archive
-        run: ./scripts/package-release.sh ci
+      - name: Save verification evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verified-installer-${{ github.sha }}
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+            dist/*.build.json
+            dist/verification.json
+          retention-days: 14

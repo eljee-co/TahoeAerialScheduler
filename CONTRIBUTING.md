@@ -34,6 +34,14 @@ Then reinstall:
 
 ## Quick Checks
 
+Use the shared verification runner for the full release gate:
+
+```bash
+./scripts/verify.sh
+```
+
+It runs Python scheduler tests and Node.js menu tests, checks syntax, compiles the apps, verifies the disk image, and records the source commit and measured duration in `dist/verification.json`. The developer tools require Node.js 22 or newer; the installed app does not.
+
 Validate shell scripts:
 
 ```bash
