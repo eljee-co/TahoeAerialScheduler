@@ -28,6 +28,19 @@ main() {
   install -m 644 "${REPO_ROOT}/resources/default-config.json" "${PAYLOAD_ROOT}/resources/default-config.json"
   install -m 755 "${REPO_ROOT}/scripts/install.sh" "${PAYLOAD_ROOT}/scripts/install.sh"
   install -m 755 "${REPO_ROOT}/scripts/uninstall.sh" "${PAYLOAD_ROOT}/scripts/uninstall.sh"
+  install -m 755 "${REPO_ROOT}/scripts/build-menu-app.sh" "${PAYLOAD_ROOT}/scripts/build-menu-app.sh"
+  install -m 644 "${REPO_ROOT}/scripts/stamp-app.py" "${PAYLOAD_ROOT}/scripts/stamp-app.py"
+  install -m 644 "${REPO_ROOT}/VERSION" "${PAYLOAD_ROOT}/VERSION"
+  "${TAHOE_BUILD_PYTHON:-python3}" - "${REPO_ROOT}" > "${PAYLOAD_ROOT}/BUILD_COMMIT" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+from importlib.util import spec_from_file_location, module_from_spec
+spec = spec_from_file_location("stamp", Path(sys.argv[1]) / "scripts/stamp-app.py")
+stamp = module_from_spec(spec)
+spec.loader.exec_module(stamp)
+print(stamp.build_commit(Path(sys.argv[1])))
+PY
 
   cat > "${INSTALLER_SCRIPT_PATH}" <<'EOF'
 #!/usr/bin/env bash
@@ -39,9 +52,11 @@ EOF
   chmod 755 "${INSTALLER_SCRIPT_PATH}"
 
   osacompile -o "${OUTPUT_PATH}" "${REPO_ROOT}/src/TahoeAerialInstaller.applescript"
+  "${TAHOE_BUILD_PYTHON:-python3}" "${REPO_ROOT}/scripts/stamp-app.py" "${OUTPUT_PATH}" installer
   mkdir -p "${OUTPUT_PATH}/Contents/Resources/payload"
   rsync -a "${PAYLOAD_ROOT}/" "${OUTPUT_PATH}/Contents/Resources/payload/"
   install -m 755 "${INSTALLER_SCRIPT_PATH}" "${OUTPUT_PATH}/Contents/Resources/install-from-bundle.sh"
+  codesign --force --sign - "${OUTPUT_PATH}"
   rm -rf "${BUILD_ROOT}"
 
   cat <<EOF

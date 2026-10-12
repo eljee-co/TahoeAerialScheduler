@@ -1,83 +1,58 @@
 # Releasing Tahoe Aerial Scheduler
 
-This file is intentionally kept in the repo as a maintainer checklist for future GitHub releases.
+## Normal release flow
 
-## Before The First Public Release
+1. Finish the change on a branch, bump the stable `major.minor.patch` value in `VERSION`, and add the matching dated section to `CHANGELOG.md`.
+2. Commit the final source, then run `./scripts/verify.sh v$(cat VERSION)` on that commit. This runs the regression tests, checks syntax, compiles both apps, verifies their local signatures and the disk image, and records the commit and measured duration.
+3. Reinstall with `./scripts/install.sh`. Confirm the playing clip matches the schedule and the menu reports verified playback. Keep the user's existing schedule and clip assignments.
+4. Open a pull request and wait for GitHub's full verification. Inspect `dist/verification.json` and the tested installer attached to the workflow.
+5. After the version bump reaches `main`, the release workflow independently runs the same verification before creating and publishing the release.
 
-- Add screenshots or a short screen recording
-- Confirm the installer works on a second Mac or a clean user account
-- Confirm the missing-download prompt appears only when the current scheduled Tahoe Aerial is not downloaded yet
-- Decide whether you want to keep the current `com.eljee...` launch-agent labels or rename them before publishing
+The workflow attaches the disk image, its SHA-256 (Secure Hash Algorithm, 256-bit) checksum, the version/source build receipt, and the verification report. It reads the release notes from `CHANGELOG.md`. App bundles and the installed runtime carry the same version and source commit.
 
-## Current License
+Published releases are immutable. A reused version tag that points at another commit fails validation. Rerunning the workflow for the same published version keeps its files unchanged. Failed publication may leave a draft; inspect its tag, commit and uploaded files before deciding how to resume it. Never blindly overwrite published assets or retry a partial upload.
 
-The project is now licensed under MIT.
+GitHub Actions dependencies are pinned to verified commits. Dependabot proposes weekly grouped action updates through pull requests; those changes go through the same verification. A dependency update does not publish another app version unless `VERSION` is bumped.
 
-## Release Checklist
+## Live Mac verification
 
-1. Update the source in `src/` and test with:
+- The menu shows the actual `Playing` clip and the separate `Scheduled` clip.
+- A wrong or unverified background produces a clear status, rather than a false success.
+- `Restore Scheduled Background` retries recovery immediately; already healthy playback does not reload.
+- A fallback to a default or still image and a stuck Aerial player recover to the intended clip.
+- A failed recovery preserves its error and waits five minutes before another automatic reload.
+- Scheduled switches keep native Aerial behavior; a brief fallback flash remains possible during renderer reloads.
+- The current missing clip prompts for a download; missing future clips do not interrupt the user.
+- Editing times and clip assignments works, and reinstalling preserves `config.json`.
+- The installed launch agent checks on named minute boundaries.
+- Healthy checks preserve the application timestamp and avoid routine log spam.
+- A reinstall leaves one menu process and includes `uninstall.sh`.
 
-```bash
-./scripts/install.sh
-```
+Record the tested commit, macOS version, duration and observations. Reuse evidence only while source, base, environment and relevant configuration are unchanged. Test a clean user account or second Mac before describing the installer as broadly validated.
 
-2. Verify:
+## Manual fallback
 
-- the menu bar item appears
-- a missing-download prompt appears if the current scheduled Tahoe clip is not yet downloaded
-- missing future Tahoe clips do not prompt until their schedule block is active
-- `Open Wallpaper Settings` opens the Wallpaper settings page
-- changing a slot from the menu updates the config
-- changing a slot's start time works
-- the scheduler applies the correct current clip
-- scheduled clip changes preserve native Aerial lock-screen video behavior
-- a brief grey flash during switching is still treated as a known limitation
-- reinstalling preserves `config.json`
-- the installed copy includes `~/Library/Application Support/TahoeAerialScheduler/uninstall.sh`
+An existing tag can be released through the workflow's manual dispatch. Its `VERSION` must match the requested tag. Leaving the tag blank uses the workflow's current branch and VERSION.
 
-3. Build the installer app and DMG:
-
-```bash
-./scripts/package-release.sh v0.1.0
-```
-
-4. Push the release tag:
+To build locally:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+./scripts/verify.sh "v$(cat VERSION)"
 ```
 
-5. Confirm GitHub Actions created the release and attached:
+Review the resulting `dist/TahoeAerialScheduler-v*.dmg`, checksum, build receipt and verification report before manually creating a release. Keep the release tag tied to that exact tested commit, and do not replace previously published files.
 
-- `dist/TahoeAerialScheduler-v0.1.0.dmg`
+## Notes users need
 
-6. In the GitHub release notes, tell users:
+- Installation is per-user and requires Python 3.10 or newer.
+- The download contains a double-click installer app.
+- Only the current scheduled clip prompts for a missing download.
+- The apps use local signatures for bundle integrity but are not signed with a Developer ID or notarized; macOS may require right-click > Open.
+- Switching native Aerials may briefly show a fallback background.
+- The scheduler relies on macOS's internal wallpaper format; a new macOS release still needs live compatibility verification.
 
-- this is a per-user installer
-- the release artifact is a DMG with a double-click installer app
-- if the current scheduled Tahoe Aerial is missing, the app will prompt the user to open Wallpaper settings and download it
-- the installer is not signed/notarized yet, so macOS may require right-click `Open` the first time
-- a brief grey flash during switching is a known limitation
+## Remaining release work
 
-## Manual Fallback
-
-If the automated release workflow fails for any reason, you can still:
-
-1. run `./scripts/package-release.sh v0.1.0`
-2. create the GitHub Release manually
-3. upload `dist/TahoeAerialScheduler-v0.1.0.dmg`
-
-## Suggested README Additions Before Publishing
-
-- one screenshot of the menu bar item
-- one screenshot of the submenu
-- a short explanation of the grey flash limitation
-- a note on the macOS version you tested against
-
-## Future Improvements
-
-- replace the JXA menu app with a native SwiftUI menu bar app
-- add a friendlier settings window
-- add signed and notarized release artifacts
-- add an icon for the app bundle itself
+- Test a clean user account or second Mac.
+- Add screenshots or a short demonstration.
+- Add Developer ID signing and notarization when the maintainer is ready to configure them.

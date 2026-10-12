@@ -81,6 +81,7 @@ write_scheduler_plist() {
   <array>
     <string>${APP_SUPPORT_DIR}/run-scheduler.sh</string>
     <string>apply</string>
+    <string>--quiet</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -104,9 +105,9 @@ EOF
     <string>${APP_SUPPORT_DIR}/config.json</string>
   </array>
   <key>StandardOutPath</key>
-  <string>${APP_SUPPORT_DIR}/scheduler.log</string>
+  <string>${APP_SUPPORT_DIR}/scheduler-launch.log</string>
   <key>StandardErrorPath</key>
-  <string>${APP_SUPPORT_DIR}/scheduler.log</string>
+  <string>${APP_SUPPORT_DIR}/scheduler-launch.log</string>
 </dict>
 </plist>
 EOF
@@ -143,11 +144,30 @@ main() {
 
   local python_path
   python_path="$(detect_python)"
+  "${python_path}" -c 'import sys; assert sys.version_info >= (3, 10), "Python 3.10 or newer is required"'
 
   mkdir -p "${APP_SUPPORT_DIR}" "${APPLICATIONS_DIR}" "${LAUNCH_AGENTS_DIR}"
 
-  install -m 755 "${REPO_ROOT}/src/scheduler.py" "${APP_SUPPORT_DIR}/scheduler.py"
+  # Build before stopping the working installation. A compiler failure must
+  # not remove the user's existing menu app.
+  local staging_dir
+  staging_dir="$(mktemp -d "${APPLICATIONS_DIR}/.tahoe-aerial-update.XXXXXX")"
+  trap 'rm -rf "${staging_dir}"' EXIT
+  TAHOE_BUILD_PYTHON="${python_path}" "${REPO_ROOT}/scripts/build-menu-app.sh" "${staging_dir}/Tahoe Aerial Menu.app"
+
+  bootout_if_loaded "${SCHEDULER_LABEL}" "${SCHEDULER_PLIST}"
+  bootout_if_loaded "${MENU_LABEL}" "${MENU_PLIST}"
+  stop_menu_app
+
+  install -m 755 "${REPO_ROOT}/src/scheduler.py" "${APP_SUPPORT_DIR}/.scheduler.py.update"
+  mv "${APP_SUPPORT_DIR}/.scheduler.py.update" "${APP_SUPPORT_DIR}/scheduler.py"
   install -m 644 "${REPO_ROOT}/src/TahoeAerialMenu.js" "${APP_SUPPORT_DIR}/TahoeAerialMenu.js"
+  install -m 644 "${REPO_ROOT}/VERSION" "${APP_SUPPORT_DIR}/VERSION"
+  "${python_path}" - "${staging_dir}/Tahoe Aerial Menu.app/Contents/Info.plist" > "${APP_SUPPORT_DIR}/BUILD_COMMIT" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], "rb") as handle:
+    print(plistlib.load(handle)["TahoeAerialBuildCommit"])
+PY
   if [[ -f "${REPO_ROOT}/scripts/uninstall.sh" ]]; then
     install -m 755 "${REPO_ROOT}/scripts/uninstall.sh" "${APP_SUPPORT_DIR}/uninstall.sh"
   fi
@@ -158,25 +178,24 @@ main() {
 
   write_scheduler_runner "${python_path}"
 
-  rm -rf "${MENU_APP_PATH}"
-  osacompile -l JavaScript -o "${MENU_APP_PATH}" "${APP_SUPPORT_DIR}/TahoeAerialMenu.js"
+  if [[ -d "${MENU_APP_PATH}" ]]; then
+    mv "${MENU_APP_PATH}" "${staging_dir}/Previous Tahoe Aerial Menu.app"
+  fi
+  mv "${staging_dir}/Tahoe Aerial Menu.app" "${MENU_APP_PATH}"
 
   write_scheduler_plist
   write_menu_plist
 
-  stop_menu_app
-  bootout_if_loaded "${SCHEDULER_LABEL}" "${SCHEDULER_PLIST}"
-  bootout_if_loaded "${MENU_LABEL}" "${MENU_PLIST}"
-
   launchctl bootstrap "gui/$(id -u)" "${SCHEDULER_PLIST}"
   launchctl bootstrap "gui/$(id -u)" "${MENU_PLIST}"
-  launchctl kickstart -k "gui/$(id -u)/${SCHEDULER_LABEL}" >/dev/null 2>&1 || true
-
-  "${APP_SUPPORT_DIR}/run-scheduler.sh" apply >/dev/null 2>&1 || true
 
   set +e
   missing_assets_output="$("${APP_SUPPORT_DIR}/run-scheduler.sh" current-missing-assets 2>/dev/null)"
   set -e
+
+  if [[ -z "${missing_assets_output}" ]]; then
+    "${APP_SUPPORT_DIR}/run-scheduler.sh" apply
+  fi
 
   cat <<EOF
 Installed Tahoe Aerial Scheduler.
@@ -202,6 +221,8 @@ EOF
     echo ""
     echo "${missing_assets_output}"
   fi
+  rm -rf "${staging_dir}"
+  trap - EXIT
 }
 
 main "$@"
