@@ -389,7 +389,7 @@ def current_asset_id() -> str | None:
         return None
 
 
-def desktop_choices_match(store: dict, asset_id: str) -> bool:
+def desktop_choice_ids(store: dict) -> list[str | None]:
     ids = []
 
     def visit(section):
@@ -405,12 +405,26 @@ def desktop_choices_match(store: dict, asset_id: str) -> bool:
 
     for key in ("AllSpacesAndDisplays", "Displays", "Spaces"):
         visit(store.get(key))
+    return ids
+
+
+def desktop_choices_match(store: dict, asset_id: str) -> bool:
+    ids = desktop_choice_ids(store)
     return bool(ids) and all(value == asset_id for value in ids)
 
 
 def desktop_store_matches(asset_id: str) -> bool:
     try:
-        return desktop_choices_match(load_plist(LIVE_PLIST), asset_id)
+        if not desktop_choices_match(load_plist(LIVE_PLIST), asset_id):
+            return False
+        # Current macOS can update the legacy Desktop before Index_v2. Check
+        # both desktop stores; an independently chosen Idle saver is not a
+        # desktop mismatch and must not cause repeated visible reloads.
+        if LEGACY_PLIST.exists():
+            legacy_ids = desktop_choice_ids(load_plist(LEGACY_PLIST))
+            if any(value != asset_id for value in legacy_ids):
+                return False
+        return True
     except (OSError, ValueError, TypeError, plistlib.InvalidFileException):
         return False
 
@@ -419,12 +433,14 @@ def legacy_asset_id() -> str | None:
     try:
         store = load_plist(LEGACY_PLIST)
         section = store["AllSpacesAndDisplays"]
-        for child_key in ("Linked", "Idle", "Desktop"):
+        for child_key in ("Desktop", "Linked", "Idle"):
             child = section.get(child_key)
             if not isinstance(child, dict):
                 continue
             choice = child["Content"]["Choices"][0]
             asset_id = decode_asset_id(choice)
+            if child_key == "Desktop":
+                return asset_id
             if asset_id:
                 return asset_id
     except Exception:

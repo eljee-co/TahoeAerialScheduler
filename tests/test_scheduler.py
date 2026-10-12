@@ -495,6 +495,26 @@ class SchedulerRecoveryTests(unittest.TestCase):
         scheduler.write_store(self.desired_id, self.now)
         self.assertTrue(scheduler.desktop_store_matches(self.desired_id))
 
+    def test_legacy_desktop_fallback_is_detected_even_with_a_matching_cached_player(self):
+        store = scheduler.load_plist(scheduler.LEGACY_PLIST)
+        store["AllSpacesAndDisplays"]["Desktop"] = self.container(provider="com.apple.wallpaper.choice.image")
+        scheduler.LEGACY_PLIST.write_bytes(plistlib.dumps(store))
+        scheduler.write_state(self.healthy_state())
+        self.assertFalse(scheduler.desktop_store_matches(self.desired_id))
+        self.assertEqual(scheduler.build_info()["playback"]["status"], "mismatch")
+        self.assertEqual(scheduler.apply_current_schedule(quiet=True), 0)
+        self.restart.assert_called_once()
+        self.assertTrue(scheduler.desktop_store_matches(self.desired_id))
+
+    def test_idle_saver_drift_does_not_restart_a_healthy_desktop(self):
+        store = scheduler.load_plist(scheduler.LEGACY_PLIST)
+        store["AllSpacesAndDisplays"]["Idle"] = self.container(self.other_id)
+        scheduler.LEGACY_PLIST.write_bytes(plistlib.dumps(store))
+        scheduler.write_state(self.healthy_state())
+        self.assertTrue(scheduler.desktop_store_matches(self.desired_id))
+        self.assertEqual(scheduler.apply_current_schedule(quiet=True), 0)
+        self.restart.assert_not_called()
+
     def test_shuffle_is_disabled_and_duplicate_choices_removed(self):
         container = self.container(self.other_id)
         container["Content"]["Choices"].append(self.container()["Content"]["Choices"][0])
